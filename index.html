@@ -93,24 +93,26 @@ const City={keys:[],tools:{},hits:[],layers:{under:[],over:[]},ev:{},insp:{},
   get S(){return S},get ctx(){return ctx},get tool(){return tool},get sel(){return sel},get view(){return V},
   P:()=>dk.matches?DARK:LIGHT,
   on(n,f){(this.ev[n]=this.ev[n]||[]).push(f)},emit(n,...a){(this.ev[n]||[]).forEach(f=>f(...a))}};
-const EMPTY=()=>({roads:[],blds:[],stops:[],routes:[],depots:[],dists:[],id:1});
-const norm=d=>{d.depots=d.depots||[];d.dists=d.dists||[];City.keys.forEach(k=>d[k]=d[k]||[]);return d};
+const EMPTY=()=>({roads:[],blds:[],stops:[],routes:[],depots:[],dists:[],id:1,lv:2});
+const norm=d=>{d.depots=d.depots||[];d.dists=d.dists||[];
+  /* старые карты: Улица/Проспект/Шоссе -> 2/4/6 полос, двустороннее движение */
+  if(!d.lv){(d.roads||[]).forEach(r=>{r.t=Math.min(3,(r.t||0)+1)});d.lv=2}City.keys.forEach(k=>d[k]=d[k]||[]);return d};
 function rd(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}}
 function wr(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
 let idx=rd('citymap:index');
 if(!idx){const old=rd('citymap');idx={cur:'c1',list:[{id:'c1',name:'Мой город'}]};wr('citymap:c1',old||EMPTY());wr('citymap:index',idx)}
 let S=norm(rd('citymap:'+idx.cur)||EMPTY()),hist=[],V={x:60,y:60,k:1};
 let tool='select',tt=0,cur=null,drag=null,mouse=[0,0],snapOn=true,dirty=true,pan=null,sel=null,extR=null;
-const ROAD=['Улица','Проспект','Шоссе'],RW=[12,18,26];
+const ROAD=['Дорога · 1 полоса','Улица · 2 полосы','Проспект · 4 полосы','Шоссе · 6 полос'],RN=['Дорога','Улица','Проспект','Шоссе'],RW=[8,12,20,28],LN=[1,2,4,6];
 const BLD={house:['Жилой дом','#f0c3a8',30],shop:['Магазин','#f5d76e',44],office:['Офис','#9fc0ea',56],industry:['Завод','#c4bfb8',90],park:['Парк','#a8d89a',130],water:['Водоём','#86c5ea',150]};
 const RC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'],DC=['#e76f51','#2a9d8f','#e9c46a','#6c8ead','#9b5de5','#43aa8b'];
 const KN={roads:'Дорога',blds:'Здание',stops:'Остановка',depots:'АТП',routes:'Маршрут',dists:'Район'};
-const LIGHT={bg:'#eef0ea',grid:'#0000000c',cas:['#c9c4b8','#d2ad4a','#cf7f22'],fil:['#fff','#fff1c2','#ffd48f'],lab:'#4c545b',ink:'#14232b',wh:'#fff'};
-const DARK={bg:'#20262a',grid:'#ffffff0d',cas:['#11161a','#5e4f26','#6e4414'],fil:['#394147','#574b2c','#68451f'],lab:'#cfd6da',ink:'#e6eef0',wh:'#0d1214'};
+const LIGHT={bg:'#eef0ea',grid:'#0000000c',cas:['#c9c4b8','#c9c4b8','#d2ad4a','#cf7f22'],fil:['#fff','#fff','#fff1c2','#ffd48f'],lab:'#4c545b',ink:'#14232b',wh:'#fff'};
+const DARK={bg:'#20262a',grid:'#ffffff0d',cas:['#11161a','#11161a','#5e4f26','#6e4414'],fil:['#394147','#394147','#574b2c','#68451f'],lab:'#cfd6da',ink:'#e6eef0',wh:'#0d1214'};
 const dk=matchMedia('(prefers-color-scheme: dark)');dk.onchange=()=>dirty=true;
 const HINT={select:'Нажмите на объект, чтобы изменить. Тяните карту, чтобы двигать.',erase:'Нажмите на объект, чтобы удалить.',road:'Ставьте точки дороги. Двойной клик или «Готово» — закончить.',ext:'Нажмите рядом с концом улицы, которую продлеваете, и ставьте точки. Двойной клик или «Готово» — закончить.',bld:'Нажмите, чтобы поставить, или протяните для размера.',stop:'Нажмите на карту, чтобы поставить остановку.',depot:'Нажмите на карту, чтобы поставить АТП.',route:'Нажимайте остановки по порядку. Первая остановка ещё раз — замкнуть кольцо.',dist:'Обведите район точками. Двойной клик или «Готово» — закончить.'};
-const TREE=[['Дороги',[['Улица','road',0],['Проспект','road',1],['Шоссе','road',2]]],['Здания',[['Жилой дом','bld','house'],['Магазин','bld','shop'],['Офис','bld','office'],['Завод','bld','industry']]],['Природа',[['Парк','bld','park'],['Водоём','bld','water']]],['Районы',[['Район','dist']]],['Транспорт',[['Автобусный транспорт',[['АТП','depot'],['Остановка','stop'],['Маршрут','route']]]]]];
-const chip0=n=>n[1]==='road'?['#9aa3a8','#e0c36a','#e59a3a'][n[2]]:n[1]==='bld'?BLD[n[2]][1]:n[1]==='dist'?DC[1]:n[1]==='route'?RC[0]:'#0c8a86';
+const TREE=[['Дороги',[[ROAD[0],'road',0],[ROAD[1],'road',1],[ROAD[2],'road',2],[ROAD[3],'road',3]]],['Здания',[['Жилой дом','bld','house'],['Магазин','bld','shop'],['Офис','bld','office'],['Завод','bld','industry']]],['Природа',[['Парк','bld','park'],['Водоём','bld','water']]],['Районы',[['Район','dist']]],['Транспорт',[['Автобусный транспорт',[['АТП','depot'],['Остановка','stop'],['Маршрут','route']]]]]];
+const chip0=n=>n[1]==='road'?['#9aa3a8','#9aa3a8','#e0c36a','#e59a3a'][n[2]]:n[1]==='bld'?BLD[n[2]][1]:n[1]==='dist'?DC[1]:n[1]==='route'?RC[0]:'#0c8a86';
 const chip=n=>n[3]||chip0(n);
 const tree=(g)=>g.map(n=>Array.isArray(n[1])?`<details open><summary>${n[0]}</summary>${tree(n[1])}</details>`:`<button class="leaf" data-tool="${n[1]}" data-tt="${n[2]??''}"><i style="background:${chip(n)}"></i>${n[0]}</button>`).join('');
 const renderTree=()=>{$('#tree').innerHTML=tree(TREE)};renderTree();
@@ -146,7 +148,7 @@ function finish(){
     }
     updateUI();dirty=true;return;
   }
-  if(tool==='road'&&c.pts.length>1)add('roads',{pts:c.pts,t:tt,n:ROAD[tt]+' '+(S.roads.length+1)});
+  if(tool==='road'&&c.pts.length>1)add('roads',{pts:c.pts,t:tt,n:RN[tt]+' '+(S.roads.length+1),ow:tt===0});
   else if(tool==='dist'&&c.pts.length>2)add('dists',{pts:c.pts,c:DC[S.dists.length%6],n:'Район '+(S.dists.length+1)});
   else if(tool==='route'&&c.s.length>1)add('routes',{n:'Маршрут '+(S.routes.length+1),c:RC[S.routes.length%6],s:c.s,loop:!!c.loop,d:S.depots[0]?S.depots[0].id:null});
   updateUI();dirty=true;
@@ -237,7 +239,7 @@ function updateUI(){
   if(!sel||cur)return;
   const{k,o}=sel;
   let h=`<h3>${KN[k]}</h3><label>Название<input id="f-n" value="${esc(o.n)}" placeholder="${k==='blds'?'Без названия':''}"></label>`;
-  if(k==='roads')h+=`<label>Тип<select id="f-t">${ROAD.map((r,i)=>`<option value="${i}" ${o.t===i?'selected':''}>${r}</option>`).join('')}</select></label><button id="f-ext" class="b">Продлить улицу</button>`;
+  if(k==='roads')h+=`<label>Тип<select id="f-t">${ROAD.map((r,i)=>`<option value="${i}" ${o.t===i?'selected':''}>${r}</option>`).join('')}</select></label><label>Движение<select id="f-ow"><option value="0" ${o.ow?'':'selected'}>Двустороннее</option><option value="1" ${o.ow?'selected':''}>Одностороннее</option></select></label>${o.ow?'<button id="f-rev" class="b">Развернуть направление</button>':''}<button id="f-ext" class="b">Продлить улицу</button>`;
   if(k==='blds')h+=`<label>Тип<select id="f-t">${Object.entries(BLD).map(([a,b])=>`<option value="${a}" ${o.t===a?'selected':''}>${b[0]}</option>`).join('')}</select></label>`;
   if(k==='routes')h+=`<label>АТП<select id="f-dp"><option value="">Не выбран</option>${S.depots.map(d=>`<option value="${d.id}" ${o.d===d.id?'selected':''}>${esc(d.n)}</option>`).join('')}</select></label><label>Цвет${sw(RC,o.c)}</label>`;
   if(k==='dists')h+=`<label>Цвет${sw(DC,o.c)}</label>`;
@@ -251,9 +253,12 @@ I.addEventListener('input',e=>{if(e.target.id==='f-n'){sel.o.n=e.target.value;ch
 I.addEventListener('change',e=>{const i=e.target.id,o=sel.o;push();
   if(e.target.dataset.f)o[e.target.dataset.f]=e.target.value;
   if(i==='f-t')o.t=sel.k==='roads'?+e.target.value:e.target.value;
-  if(i==='f-dp')o.d=e.target.value?+e.target.value:null;changed()});
+  if(i==='f-dp')o.d=e.target.value?+e.target.value:null;
+  if(i==='f-ow'){o.ow=e.target.value==='1';if(!o.ow)o.rev=false}
+  changed();if(i==='f-ow')updateUI()});
 I.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
   if(b.id==='f-del')del(sel.k,sel.o);else if(b.id==='f-ok'){sel=null;updateUI();dirty=true}
+  else if(b.id==='f-rev'){push();sel.o.rev=!sel.o.rev;changed();updateUI()}
   else if(b.id==='f-ext'){const R=sel.o;setTool('ext');extR=R;sel=null;updateUI();dirty=true}
   else if(b.dataset.c){push();sel.o.c=b.dataset.c;changed();updateUI()}});
 function legend(){
@@ -313,6 +318,45 @@ function roadLabel(R,P){
     ctx.save();ctx.translate((a[0]+b[0])/2,(a[1]+b[1])/2);ctx.rotate(an);ctx.fillText(R.n,0,.5);ctx.restore();
   });
 }
+/* смещённая параллельная линия (для полос) */
+function offs(pts,d){
+  const nm=(a,b)=>{const x=b[0]-a[0],y=b[1]-a[1],l=Math.hypot(x,y)||1;return[-y/l,x/l]};
+  return pts.map((p,i)=>{
+    const n1=i?nm(pts[i-1],p):null,n2=i<pts.length-1?nm(p,pts[i+1]):null;
+    if(!n1)return[p[0]+n2[0]*d,p[1]+n2[1]*d];
+    if(!n2)return[p[0]+n1[0]*d,p[1]+n1[1]*d];
+    let mx=n1[0]+n2[0],my=n1[1]+n2[1];const ml=Math.hypot(mx,my)||1;mx/=ml;my/=ml;
+    const c=Math.max(.5,mx*n1[0]+my*n1[1]);return[p[0]+mx*d/c,p[1]+my*d/c];
+  });
+}
+/* разметка: двустороннее — жёлтая осевая, между полосами пунктир */
+function marks(R,P){
+  const n=LN[R.t],w=RW[R.t],lw=w/n;
+  for(let k=1;k<n;k++){
+    const d=-w/2+k*lw;
+    if(!R.ow&&k===n/2)line(offs(R.pts,d),1.4,'#d2a800');
+    else line(offs(R.pts,d),1,P.lab+'88',[6,7]);
+  }
+}
+/* стрелки направления на односторонних дорогах (по каждой полосе) */
+function arrows(R,P){
+  if(!R.ow)return;
+  const n=LN[R.t],w=RW[R.t],lw=w/n,s=Math.max(2.4,lw*.38);
+  for(let j=0;j<n;j++){
+    const q=offs(R.pts,-w/2+(j+.5)*lw);
+    segs(q).forEach(([a,b])=>{
+      const L=Math.hypot(b[0]-a[0],b[1]-a[1]);if(L<36)return;
+      let an=Math.atan2(b[1]-a[1],b[0]-a[0]);if(R.rev)an+=Math.PI;
+      const cnt=Math.floor(L/70)+1;
+      for(let i=1;i<=cnt;i++){
+        const t=i/(cnt+1);
+        ctx.save();ctx.translate(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t);ctx.rotate(an);
+        ctx.beginPath();ctx.moveTo(s,0);ctx.lineTo(-s,-s*.8);ctx.lineTo(-s*.35,0);ctx.lineTo(-s,s*.8);ctx.closePath();
+        ctx.fillStyle=P.lab;ctx.globalAlpha=.8;ctx.fill();ctx.restore();
+      }
+    });
+  }
+}
 function draw(){
   const P=dk.matches?DARK:LIGHT,d=devicePixelRatio||1,W=cv.width/d,H=cv.height/d;
   ctx.setTransform(d,0,0,d,0,0);ctx.fillStyle=P.bg;ctx.fillRect(0,0,W,H);
@@ -328,7 +372,8 @@ function draw(){
   City.layers.under.forEach(f=>f(ctx,P));
   S.blds.filter(b=>b.t==='water'||b.t==='park').forEach(b=>rect(b));
   S.roads.forEach(R=>line(R.pts,RW[R.t]+4,P.cas[R.t]));
-  S.roads.forEach(R=>{line(R.pts,RW[R.t],P.fil[R.t]);if(R.t)line(R.pts,1.2,P.cas[R.t],[8,8])});
+  S.roads.forEach(R=>{line(R.pts,RW[R.t],P.fil[R.t]);marks(R,P)});
+  S.roads.forEach(R=>arrows(R,P));
   S.roads.forEach(R=>roadLabel(R,P));
   S.blds.filter(b=>b.t!=='water'&&b.t!=='park').forEach(b=>rect(b));
   S.blds.forEach(b=>{if(b.n&&Math.min(b.w,b.h)*V.k>30){ctx.font='700 10px Manrope,system-ui,sans-serif';ctx.fillStyle='#14232b';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(b.n,b.x+b.w/2,b.y+b.h/2,b.w-4)}});
@@ -397,7 +442,7 @@ City.register({
   function proj(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));const q=t<=0?a:t>=1?b:lerp(a,b,t);return{t,q,d:Math.hypot(p[0]-q[0],p[1]-q[1])}}
   function build(){
     const S=City.S,segs=[],links=[];
-    S.roads.forEach((R,ri)=>{for(let i=1;i<R.pts.length;i++){const a=R.pts[i-1],b=R.pts[i];segs.push({a,b,ri,sp:[{t:0,p:a},{t:1,p:b}]})}});
+    S.roads.forEach((R,ri)=>{for(let i=1;i<R.pts.length;i++){const a=R.pts[i-1],b=R.pts[i];segs.push({a,b,ri,sp:[{t:0,p:a},{t:1,p:b}]})/* ri -> S.roads[ri] */}});
     for(let i=0;i<segs.length;i++)for(let j=i+1;j<segs.length;j++){
       const s=segs[i],u=segs[j];if(s.ri===u.ri)continue;
       const r=[s.b[0]-s.a[0],s.b[1]-s.a[1]],q=[u.b[0]-u.a[0],u.b[1]-u.a[1]],den=r[0]*q[1]-r[1]*q[0];
@@ -419,8 +464,9 @@ City.register({
     });
     const idx=new Map(),pts=[],adj=[];
     const node=p=>{const k=K(p);if(!idx.has(k)){idx.set(k,pts.length);pts.push(p);adj.push([])}return idx.get(k)};
-    const edge=(p,q)=>{const a=node(p),b=node(q);if(a===b)return;const w=Math.hypot(p[0]-q[0],p[1]-q[1]);adj[a].push([b,w]);adj[b].push([a,w])};
-    segs.forEach(s=>{s.sp.sort((x,y)=>x.t-y.t);for(let i=1;i<s.sp.length;i++)edge(s.sp[i-1].p,s.sp[i].p)});
+    const edge=(p,q,one)=>{const a=node(p),b=node(q);if(a===b)return;const w=Math.hypot(p[0]-q[0],p[1]-q[1]);adj[a].push([b,w]);if(!one)adj[b].push([a,w])};
+    /* на односторонних дорогах рёбра графа направленные */
+    segs.forEach(s=>{s.sp.sort((x,y)=>x.t-y.t);const R=S.roads[s.ri];for(let i=1;i<s.sp.length;i++){const A=s.sp[i-1].p,B=s.sp[i].p;if(R.ow)R.rev?edge(B,A,true):edge(A,B,true);else edge(A,B)}});
     links.forEach(l=>edge(l[0],l[1]));
     return{idx,pts,adj,sn};
   }
@@ -540,22 +586,38 @@ City.register({
 
   /* ---------- автобусы ---------- */
   /* Добавляйте модели сюда: 'Название':{img:'файл.png', l:длина в метрах} */
-  /* вид сверху Yutong ZK6890HGQ: белая крыша, люк, блок из 5 баллонов, большой люк; по бокам полосы цвета автобуса. Перед — справа */
+  /* Виды сверху. Цвет автобуса = цвет крыши; кондиционер всегда светлый. Перед автобуса — справа */
+  const roof=(ctx,L,W,col)=>{
+    ctx.lineWidth=1;ctx.strokeStyle='#0008';
+    rr(ctx,-L/2,-W/2,L,W,W*.14);ctx.fillStyle=col;ctx.fill();ctx.stroke();
+    ctx.fillStyle='#14232b';ctx.fillRect(-L/2+W*.1,-W/2+1,L-W*.2,W*.08);ctx.fillRect(-L/2+W*.1,W/2-1-W*.08,L-W*.2,W*.08);
+    ctx.fillStyle='#bfe3f2';ctx.fillRect(L*.465,-W*.36,L*.03,W*.72);                        /* лобовое стекло */
+  };
+  const hatch=(ctx,x,y,w,h,r)=>{rr(ctx,x,y,w,h,r);ctx.fillStyle='#ffffff59';ctx.fill();ctx.lineWidth=1;ctx.strokeStyle='#0006';ctx.stroke()};
+  /* Yutong ZK6890HGQ: люк, блок из 5 баллонов, большой люк-кондиционер */
   const yutong=(ctx,L,W,col)=>{
     const X=f=>f*L,Y=f=>f*W;
-    ctx.lineWidth=1;ctx.strokeStyle='#0008';
-    rr(ctx,-L/2,-W/2,L,W,W*.14);ctx.fillStyle='#f3f5f6';ctx.fill();ctx.stroke();
-    ctx.fillStyle=col;ctx.fillRect(X(-.5)+W*.1,-W/2+1,L-W*.2,W*.09);ctx.fillRect(X(-.5)+W*.1,W/2-1-W*.09,L-W*.2,W*.09);
-    ctx.fillStyle='#bfe3f2';ctx.fillRect(X(.465),Y(-.36),X(.03),Y(.72));                    /* лобовое стекло */
-    rr(ctx,X(-.4),Y(-.14),X(.1),Y(.28),W*.04);ctx.fillStyle='#aeb6bb';ctx.fill();ctx.stroke();   /* малый люк */
+    roof(ctx,L,W,col);
+    hatch(ctx,X(-.4),Y(-.14),X(.1),Y(.28),W*.04);
     ctx.fillStyle='#c0392b';[-.07,.07].forEach(y=>{ctx.beginPath();ctx.arc(X(-.385),Y(y),Math.max(W*.02,.4),0,7);ctx.fill()});
-    rr(ctx,X(-.21),Y(-.33),X(.265),Y(.66),W*.08);ctx.fillStyle='#e6eaec';ctx.fill();ctx.stroke(); /* блок баллонов */
+    hatch(ctx,X(-.21),Y(-.33),X(.265),Y(.66),W*.08);                                        /* блок баллонов */
     rr(ctx,X(-.185),Y(-.13),X(.2),Y(.26),W*.02);ctx.fillStyle='#9fb3a8';ctx.fill();
     ctx.fillStyle='#1f3a33';const cr=Math.min(W*.1,L*.017);
     for(let i=0;i<5;i++){ctx.beginPath();ctx.arc(X(-.165+i*.038),0,cr,0,7);ctx.fill()}
-    rr(ctx,X(.09),Y(-.34),X(.31),Y(.68),W*.1);ctx.fillStyle='#fafbfb';ctx.fill();ctx.stroke();   /* большой люк */
+    rr(ctx,X(.09),Y(-.34),X(.31),Y(.68),W*.1);ctx.fillStyle='#fafbfb';ctx.fill();ctx.lineWidth=1;ctx.strokeStyle='#0008';ctx.stroke();  /* кондиционер */
   };
-  const MODELS={'MAZ 206.948':{img:'maz206_948.png',l:12},'Yutong ZK6890HGQ':{img:'yutong_zk6890hgq.png',l:9,top:yutong}};
+  /* MAZ 206.063: два люка и кондиционер с тремя вентиляторами посередине */
+  const maz063=(ctx,L,W,col)=>{
+    const X=f=>f*L,Y=f=>f*W;
+    roof(ctx,L,W,col);
+    hatch(ctx,X(-.284),Y(-.13),X(.13),Y(.26),W*.05);
+    hatch(ctx,X(.12),Y(-.13),X(.13),Y(.26),W*.05);
+    rr(ctx,X(-.1),Y(-.33),X(.2),Y(.66),W*.05);ctx.fillStyle='#f2f4f5';ctx.fill();ctx.lineWidth=1;ctx.strokeStyle='#0008';ctx.stroke();  /* кондиционер */
+    ctx.fillStyle='#8a97a3';ctx.fillRect(X(-.098),Y(-.33),X(.006),Y(.66));ctx.fillRect(X(.092),Y(-.33),X(.006),Y(.66));
+    ctx.fillStyle='#1c2226';const cr=Math.min(W*.14,L*.026);
+    [-.045,0,.045].forEach(f=>{ctx.beginPath();ctx.arc(X(f),0,cr,0,7);ctx.fill()});
+  };
+  const MODELS={'MAZ 206.948':{img:'maz206_948.png',l:12},'MAZ 206.063':{img:'maz206_063.webp',l:12,top:maz063},'Yutong ZK6890HGQ':{img:'yutong_zk6890hgq.png',l:9,top:yutong}};
   const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
   const pathOf=R=>{const b=R=>{const a=R.s.map(i=>City.S.stops.find(s=>s.id===i)).filter(Boolean).map(s=>[s.x,s.y]);if(R.loop&&a.length)a.push(a[0]);return a};return City.path?City.path(R,b):b(R)};
   const CI=new WeakMap();
@@ -661,13 +723,15 @@ City.register({
     const s=City.sel;if(!s||s.k!=='roads')return;
     const o=s.o,S=City.S;if(!o.n||!o.n.trim())return;
     for(const R of S.roads){
-      if(R===o||R.t!==o.t||R.n!==o.n)continue;
+      if(R===o||R.t!==o.t||R.n!==o.n||!!R.ow!==!!o.ow)continue;
       const a=R.pts,b=o.pts,A0=a[0],A1=a[a.length-1],B0=b[0],B1=b[b.length-1];
+      /* у односторонних направления должны совпадать */
+      const eq=(!!R.rev===!!o.rev),ok=need=>!R.ow||eq===need;
       let pts=null;
-      if(same(A1,B0))pts=a.concat(b.slice(1));
-      else if(same(A1,B1))pts=a.concat(b.slice().reverse().slice(1));
-      else if(same(A0,B1))pts=b.concat(a.slice(1));
-      else if(same(A0,B0))pts=b.slice().reverse().concat(a.slice(1));
+      if(same(A1,B0)&&ok(true))pts=a.concat(b.slice(1));
+      else if(same(A1,B1)&&ok(false))pts=a.concat(b.slice().reverse().slice(1));
+      else if(same(A0,B1)&&ok(true))pts=b.concat(a.slice(1));
+      else if(same(A0,B0)&&ok(false))pts=b.slice().reverse().concat(a.slice(1));
       if(!pts)continue;
       R.pts=pts;S.roads=S.roads.filter(x=>x!==o);
       City.select('roads',R);City.changed();City.updateUI();
@@ -675,6 +739,65 @@ City.register({
     }
   }
   $('#insp').addEventListener('change',e=>{if(e.target.id==='f-n'||e.target.id==='f-t')merge()});
+})();
+</script>
+<script>
+/* Плагин: светофоры на перекрёстках (там, где сходятся 3 и более дорог) */
+(function(){
+  let J=null,Sref=null;
+  City.on('change',()=>{J=null});
+  const K=p=>Math.round(p[0]/2)+','+Math.round(p[1]/2);
+  const dseg=(p,a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy)};
+  function calc(){
+    const S=City.S,cand=new Map(),segs=[];
+    S.roads.forEach((R,ri)=>R.pts.slice(1).forEach((b,i)=>segs.push({a:R.pts[i],b,ri})));
+    for(let i=0;i<segs.length;i++)for(let j=i+1;j<segs.length;j++){
+      const s=segs[i],u=segs[j];if(s.ri===u.ri)continue;
+      const r=[s.b[0]-s.a[0],s.b[1]-s.a[1]],q=[u.b[0]-u.a[0],u.b[1]-u.a[1]],den=r[0]*q[1]-r[1]*q[0];
+      if(Math.abs(den)<1e-9)continue;
+      const w=[u.a[0]-s.a[0],u.a[1]-s.a[1]],t=(w[0]*q[1]-w[1]*q[0])/den,v=(w[0]*r[1]-w[1]*r[0])/den,e=1e-6;
+      if(t<-e||t>1+e||v<-e||v>1+e)continue;
+      const p=[s.a[0]+r[0]*t,s.a[1]+r[1]*t];cand.set(K(p),p);
+    }
+    S.roads.forEach((R,ri)=>[R.pts[0],R.pts[R.pts.length-1]].forEach(e=>{if(segs.some(s=>s.ri!==ri&&dseg(e,s.a,s.b)<4))cand.set(K(e),e)}));
+    const out=[];
+    cand.forEach(p=>{
+      let arms=0;
+      S.roads.forEach((R,ri)=>{
+        const n=R.pts.length;let v=-1;
+        for(let i=0;i<n;i++)if(Math.hypot(R.pts[i][0]-p[0],R.pts[i][1]-p[1])<4){v=i;break}
+        if(v>=0)arms+=(v===0||v===n-1)?1:2;
+        else if(segs.some(s=>s.ri===ri&&dseg(p,s.a,s.b)<2))arms+=2;
+      });
+      if(arms>=3)out.push(p);
+    });
+    return out;
+  }
+  const jn=()=>{if(!J||Sref!==City.S){J=calc();Sref=City.S}return J};
+  const live=()=>City.S.lights.filter(l=>jn().some(p=>Math.hypot(p[0]-l.x,p[1]-l.y)<6));
+  City.register({
+    key:'lights',label:'Светофор',
+    group:'Дороги',leaf:'Светофор',color:'#e4572e',
+    tool:'light',hint:'Нажмите на перекрёсток (где сходятся 3+ дороги), чтобы поставить светофор. Повторный клик или «Ластик» — убрать.',
+    click(p,r){
+      const k=City.view.k;let best=null;
+      jn().forEach(j=>{const d=Math.hypot(j[0]-r[0],j[1]-r[1]);if(d<26/k&&(!best||d<best.d))best={d,j}});
+      if(!best)return;
+      const ex=City.S.lights.find(l=>Math.hypot(l.x-best.j[0],l.y-best.j[1])<6);
+      if(ex)City.del('lights',ex);else City.add('lights',{x:best.j[0],y:best.j[1],n:'Светофор'});
+    },
+    layer:'over',
+    draw(ctx,P){
+      if(City.tool==='light'){jn().forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],14,0,7);ctx.lineWidth=2;ctx.strokeStyle='#0c8a86';ctx.setLineDash([5,4]);ctx.stroke();ctx.setLineDash([])})}
+      live().forEach(l=>{
+        const x=l.x+12,y=l.y-12;
+        ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(x,y);ctx.lineWidth=1.5;ctx.strokeStyle='#14232b';ctx.stroke();
+        ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x-4.5,y-11,9,22,3);ctx.fillStyle='#1c2226';ctx.fill();ctx.lineWidth=1;ctx.strokeStyle='#fff';ctx.stroke();
+        [['#e63946',-6.5],['#f4c430',0],['#2ecc71',6.5]].forEach(([c,dy])=>{ctx.beginPath();ctx.arc(x,y+dy,2.4,0,7);ctx.fillStyle=c;ctx.fill()});
+      });
+    },
+    hit(p,r){return live().find(l=>Math.hypot(l.x+12-p[0],l.y-12-p[1])<r+10||Math.hypot(l.x-p[0],l.y-p[1])<r+6)}
+  });
 })();
 </script>
 </body>
