@@ -793,11 +793,199 @@ City.register({
         const x=l.x+12,y=l.y-12;
         ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(x,y);ctx.lineWidth=1.5;ctx.strokeStyle='#14232b';ctx.stroke();
         ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x-4.5,y-11,9,22,3);ctx.fillStyle='#1c2226';ctx.fill();ctx.lineWidth=1;ctx.strokeStyle='#fff';ctx.stroke();
-        [['#e63946',-6.5],['#f4c430',0],['#2ecc71',6.5]].forEach(([c,dy])=>{ctx.beginPath();ctx.arc(x,y+dy,2.4,0,7);ctx.fillStyle=c;ctx.fill()});
+        const ph=City.lightPhase?City.lightPhase(0):'*';   /* сигнал для горизонтальных дорог */
+        [['#e63946',-6.5,'r'],['#f4c430',0,'y'],['#2ecc71',6.5,'g']].forEach(([c,dy,k])=>{ctx.globalAlpha=(ph==='*'||ph===k)?1:.25;ctx.beginPath();ctx.arc(x,y+dy,2.4,0,7);ctx.fillStyle=c;ctx.fill()});
+        ctx.globalAlpha=1;
       });
     },
     hit(p,r){return live().find(l=>Math.hypot(l.x+12-p[0],l.y-12-p[1])<r+10||Math.hypot(l.x-p[0],l.y-p[1])<r+6)}
   });
+})();
+</script>
+<script>
+/* Плагин: машины в трафике (правостороннее движение, повороты на перекрёстках, светофоры) */
+(function(){
+  const mpu=()=>((City.S.scale||50)/50);
+  const KM=[25,35,45,55];                                   /* скорость по типу дороги, км/ч */
+  /* Модели: img — файл рядом с index.html, l — длина в метрах, ws/rw — лобовое и заднее стекло (доли длины) */
+  const CARS=[
+    {n:'Toyota Corolla Fielder',img:'tcf.WEBP',l:4.4,ws:[.08,.24],rw:[-.43,-.38]},
+    {n:'Mercedes CLA AMG 45 AMG I (C117, X117)',img:'mercedes_claamg45.WEBP',l:4.7,ws:[.06,.2],rw:[-.3,-.14]},
+    {n:'Lexus RX V 350',img:'lexusrxv350.WEPB',l:4.9,ws:[.1,.25],rw:[-.44,-.38]},
+    {n:'Lexus LC500',img:'lexuslc500.WEPB',l:4.8,ws:[.04,.2],rw:[-.3,-.16]}
+  ];
+  const COL=['#ffffff','#1c1f24','#9aa3a8','#b5121b','#1e4fa8','#d9d9d9','#2c3e50','#6b4f3a'];
+  let cars=[],nodes=null,Sref=null,T=0,on=true,last=performance.now(),dn=null,cpos=[];
+  const E=City.esc;
+  const rr=(ctx,x,y,w,h,r)=>{ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,w,h,r)};
+  const cLen=c=>Math.max(c.m.l*1.8/mpu(),8);
+
+  /* длины вдоль дороги */
+  const IN=new WeakMap();
+  function inf(R){let m=IN.get(R.pts);if(!m){const c=[0];for(let i=1;i<R.pts.length;i++)c.push(c[i-1]+Math.hypot(R.pts[i][0]-R.pts[i-1][0],R.pts[i][1]-R.pts[i-1][1]));m={c,L:c[c.length-1]};IN.set(R.pts,m)}return m}
+  function loc(R,s){
+    const m=inf(R),P=R.pts;s=Math.max(0,Math.min(m.L,s));
+    let i=1;while(i<P.length-1&&m.c[i]<s)i++;
+    const a=P[i-1],b=P[i],l=(m.c[i]-m.c[i-1])||1,t=(s-m.c[i-1])/l;
+    return{x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t,tx:(b[0]-a[0])/l,ty:(b[1]-a[1])/l};
+  }
+  const nl=R=>R.ow?LN[R.t]:Math.max(1,LN[R.t]/2);              /* полос в одну сторону */
+  const dOf=(R,c)=>{const w=RW[R.t],lw=w/(R.ow?LN[R.t]:Math.max(2,LN[R.t]));
+    if(R.ow)return -w/2+(c.li+.5)*lw;
+    return (c.dir>0?1:-1)*(c.li+.5)*lw};                       /* вперёд — по правую руку */
+  function pos(c){const h=loc(c.R,c.s),d=dOf(c.R,c);return[h.x-h.ty*d,h.y+h.tx*d,h]}
+  const auto=R=>Math.min(40,Math.round(inf(R).L/90));
+  const carsOf=R=>(R.cars===undefined||R.cars==='')?auto(R):Math.max(0,Math.min(60,Math.round(+R.cars)||0));
+
+  /* светофор: 20 с цикл, оси чередуются */
+  const phase=axis=>{const t=(T+(axis?10:0))%20;return t<8?'g':t<10?'y':'r'};
+  City.lightPhase=phase;
+
+  /* узлы: места пересечения дорог */
+  function buildNodes(){
+    const S=City.S,rs=S.roads,out=new Map(),sg=[],lights=S.lights||[];
+    rs.forEach(R=>out.set(R,[]));
+    rs.forEach(R=>{const m=inf(R);R.pts.slice(1).forEach((b,i)=>sg.push({R,a:R.pts[i],b,c0:m.c[i],l:m.c[i+1]-m.c[i]}))});
+    for(let i=0;i<sg.length;i++)for(let j=i+1;j<sg.length;j++){
+      const s=sg[i],u=sg[j];if(s.R===u.R)continue;
+      const r=[s.b[0]-s.a[0],s.b[1]-s.a[1]],q=[u.b[0]-u.a[0],u.b[1]-u.a[1]],den=r[0]*q[1]-r[1]*q[0];
+      if(Math.abs(den)<1e-9)continue;
+      const w=[u.a[0]-s.a[0],u.a[1]-s.a[1]],t=(w[0]*q[1]-w[1]*q[0])/den,v=(w[0]*r[1]-w[1]*r[0])/den,e=1e-4;
+      if(t<-e||t>1+e||v<-e||v>1+e)continue;
+      const x=s.a[0]+r[0]*t,y=s.a[1]+r[1]*t,ss=s.c0+Math.max(0,Math.min(1,t))*s.l,su=u.c0+Math.max(0,Math.min(1,v))*u.l;
+      const light=lights.some(l=>Math.hypot(l.x-x,l.y-y)<8);
+      out.get(s.R).push({s:ss,R2:u.R,s2:su,light});out.get(u.R).push({s:su,R2:s.R,s2:ss,light});
+    }
+    out.forEach((a,R)=>{a.sort((p,q)=>p.s-q.s);out.set(R,a.filter((n,i)=>!a.slice(0,i).some(o=>o.R2===n.R2&&Math.abs(o.s-n.s)<3)))});
+    return out;
+  }
+  function spawn(R){
+    const L=inf(R).L;
+    return{R,s:Math.random()*L,dir:R.ow?(R.rev?-1:1):(Math.random()<.5?1:-1),li:Math.floor(Math.random()*nl(R)),v:0,
+      m:CARS[Math.floor(Math.random()*CARS.length)],col:COL[Math.floor(Math.random()*COL.length)],vf:.85+Math.random()*.3,cool:0,ox:0,oy:0};
+  }
+  function sync(){
+    const rs=City.S.roads;
+    cars=cars.filter(c=>rs.includes(c.R));
+    rs.forEach(R=>{
+      if(inf(R).L<30)return;
+      const want=carsOf(R),mine=cars.filter(c=>c.R===R);
+      for(let i=mine.length;i<want;i++)cars.push(spawn(R));
+      mine.slice(want).forEach(c=>cars.splice(cars.indexOf(c),1));
+    });
+  }
+  function ensure(){
+    if(Sref!==City.S){Sref=City.S;cars=[];nodes=null}
+    if(!nodes){nodes=buildNodes();sync()}
+  }
+  City.on('change',()=>{nodes=null});
+
+  /* поворот на другую дорогу в узле (или несколько узлов у конца дороги) */
+  function turn(c,list){
+    const opts=[];
+    list.forEach(n=>{const L2=inf(n.R2).L;
+      [1,-1].forEach(d2=>{
+        if(n.R2.ow&&(n.R2.rev?-1:1)!==d2)return;
+        if(d2>0&&n.s2>L2-4)return;if(d2<0&&n.s2<4)return;
+        opts.push({n,d2});
+      });
+    });
+    if(!opts.length)return false;
+    const o=opts[Math.floor(Math.random()*opts.length)],p0=pos(c);
+    c.R=o.n.R2;c.s=o.n.s2;c.dir=o.d2;c.li=Math.floor(Math.random()*nl(c.R));c.cool=14;
+    const p1=pos(c);c.ox=p0[0]-p1[0];c.oy=p0[1]-p1[1];
+    return true;
+  }
+
+  function step(c,dt){
+    const R=c.R,Lr=inf(R).L;if(!Lr)return;
+    if(R.ow)c.dir=R.rev?-1:1;
+    c.li=Math.min(c.li,nl(R)-1);
+    const nds=nodes.get(R)||[],cl=cLen(c),vmax=(KM[R.t]*c.vf/3.6)*4/mpu();
+    const h0=loc(R,c.s),axis=Math.abs(h0.tx)>Math.abs(h0.ty)?0:1,stopD=10+cl/2;
+    let tv=vmax,lim=Infinity;
+    /* красный свет впереди */
+    for(const n of nds){
+      if(!n.light)continue;const d=(n.s-c.s)*c.dir;
+      if(d<stopD-1||d>40)continue;
+      const ph=phase(axis);
+      if(ph==='g'||(ph==='y'&&d<stopD+10))continue;
+      tv=Math.min(tv,vmax*Math.min(1,(d-stopD)/24));lim=Math.min(lim,Math.max(0,d-stopD));
+    }
+    /* машина впереди */
+    for(const o of cars){
+      if(o===c||o.R!==R||o.dir!==c.dir||o.li!==c.li)continue;
+      const g=(o.s-c.s)*c.dir;if(g<=0)continue;
+      const gap=g-(cl+cLen(o))/2;
+      if(gap<cl*2)tv=Math.min(tv,vmax*Math.max(0,gap/(cl*2)));
+      lim=Math.min(lim,Math.max(0,gap-.6));
+    }
+    c.v+=(tv-c.v)*Math.min(1,dt*2.5);
+    const ds=Math.min(lim,Math.max(0,c.v)*dt),old=c.s,ns=old+c.dir*ds;
+    c.cool=Math.max(0,c.cool-ds);
+    let moved=false;
+    if(!c.cool){
+      for(const n of nds){
+        if(n.s<4||n.s>Lr-4)continue;
+        if((n.s-old)*c.dir>0&&(n.s-ns)*c.dir<=0&&Math.random()<.3){c.s=n.s;if(turn(c,[n])){moved=true;break}c.s=old}
+      }
+    }
+    if(!moved){
+      if(ns<0||ns>Lr){
+        const endS=ns<0?0:Lr,en=nds.filter(n=>Math.abs(n.s-endS)<4);
+        c.s=endS;
+        if(!turn(c,en)){
+          if(!R.ow)c.dir=-c.dir;                            /* тупик: разворот */
+          else{c.s=c.dir>0?0:Lr;c.ox=c.oy=0}                /* конец односторонней: появляется в начале */
+        }
+      }else c.s=ns;
+    }
+    const p=pos(c),h=p[2],k=Math.exp(-dt*5);
+    c.ox*=k;c.oy*=k;c.x=p[0]+c.ox;c.y=p[1]+c.oy;
+    const ta=Math.atan2(h.ty,h.tx)+(c.dir<0?Math.PI:0);
+    if(c.an===undefined)c.an=ta;
+    let da=ta-c.an;da=Math.atan2(Math.sin(da),Math.cos(da));c.an+=da*Math.min(1,dt*8);
+  }
+
+  /* вид сверху */
+  function cdraw(ctx,L,W,col,m){
+    ctx.lineWidth=.7;ctx.strokeStyle='#000b';
+    rr(ctx,-L/2,-W/2,L,W,W*.3);ctx.fillStyle=col;ctx.fill();ctx.stroke();
+    const g=(a,b,wa,wb)=>{ctx.beginPath();ctx.moveTo(L*a,-W*wa);ctx.lineTo(L*b,-W*wb);ctx.lineTo(L*b,W*wb);ctx.lineTo(L*a,W*wa);ctx.closePath();ctx.fill()};
+    ctx.fillStyle='#16222b';g(m.ws[0],m.ws[1],.3,.38);g(m.rw[0],m.rw[1],.36,.3);
+    ctx.fillStyle='#ffffff2a';ctx.fillRect(L*m.rw[1],-W*.3,L*(m.ws[0]-m.rw[1]),W*.6);
+    ctx.fillStyle='#fff6c8';ctx.fillRect(L*.47,-W*.4,L*.03,W*.16);ctx.fillRect(L*.47,W*.24,L*.03,W*.16);
+    ctx.fillStyle='#d33';ctx.fillRect(-L*.5,-W*.4,L*.025,W*.16);ctx.fillRect(-L*.5,W*.24,L*.025,W*.16);
+  }
+  City.layers.over.push(ctx=>{
+    if(!on)return;ensure();cpos=[];
+    cars.forEach(c=>{
+      if(c.x===undefined)return;
+      const L=cLen(c),W=L*.4;
+      ctx.save();ctx.translate(c.x,c.y);ctx.rotate(c.an||0);cdraw(ctx,L,W,c.col,c.m);ctx.restore();
+      cpos.push({x:c.x,y:c.y,r:Math.max(L/2,8),c});
+    });
+  });
+
+  /* кнопка, поле «Машин на дороге», окно с фото */
+  $('#p2').insertAdjacentHTML('beforeend','<button id="cs" class="b on">Машины</button>');
+  $('#cs').onclick=e=>{on=!on;e.currentTarget.classList.toggle('on',on);City.redraw()};
+  const prev=City.insp.roads;
+  City.insp.roads=o=>prev(o)+`<label>Машин на дороге<input type="number" min="0" max="60" data-f="cars" placeholder="авто (${auto(o)})" value="${o.cars===undefined?'':E(o.cars)}"></label>`;
+  cv.addEventListener('pointerdown',e=>dn=[e.clientX,e.clientY]);
+  cv.addEventListener('pointerup',e=>{
+    if(!on||!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
+    const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k,h=cpos.find(q=>Math.hypot(q.x-x,q.y-y)<q.r);
+    if(!h)return;
+    const m=h.c.m;
+    $('#pop').innerHTML=`<b>${E(m.n)}</b><div style="color:var(--mut)">${E(h.c.R.n)}</div><img src="${E(m.img)}" alt="${E(m.n)}" onerror="this.outerHTML='<small>Нет файла ${E(m.img)} рядом с index.html</small>'"><div class="row"><button id="pc2" class="b">Закрыть</button></div>`;
+    $('#pop').hidden=false;$('#pc2').onclick=()=>$('#pop').hidden=true;
+  });
+  (function loop(){
+    const n=performance.now(),dt=Math.min(.1,(n-last)/1000);last=n;
+    if(on){ensure();T+=dt;cars.forEach(c=>step(c,dt));if(cars.length||(City.S.lights&&City.S.lights.length))City.redraw()}
+    requestAnimationFrame(loop);
+  })();
 })();
 </script>
 </body>
