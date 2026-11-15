@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Мой город — редактор карты</title>
+<style>
+:root{--bg:#f3f1ea;--ui:#fbfaf6;--ink:#23262b;--mut:#6b7078;--line:#d8d5cb;--acc:#1f6f78;--accink:#fff;--map:#e9eddf;--grid:#00000010}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1d20;--ui:#25282c;--ink:#e8e6df;--mut:#9aa0a8;--line:#3a3e44;--acc:#4fb3bf;--accink:#10181a;--map:#2b3029;--grid:#ffffff10}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:15px/1.4 "Trebuchet MS","Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink);display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);overflow:hidden}
+header{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px;background:var(--ui);border-bottom:1px solid var(--line)}
+h1{font:700 17px "Georgia",serif;margin:0 8px 0 2px;letter-spacing:.2px}
+button,select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
+button.on{background:var(--acc);color:var(--accink);border-color:var(--acc)}
+button:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.sep{width:1px;align-self:stretch;background:var(--line);margin:0 4px}
+#wrap{position:relative;flex:1;min-height:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
+#hint{position:absolute;left:8px;bottom:8px;max-width:min(92%,420px);background:var(--ui);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--mut)}
+#legend{position:absolute;right:8px;top:8px;max-width:50%;background:var(--ui);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;display:none}
+#legend i{display:inline-block;width:18px;height:5px;border-radius:3px;margin-right:6px;vertical-align:middle}
+#cname{color:var(--mut);font-size:13px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+dialog{background:var(--ui);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:16px;width:min(92vw,380px)}
+dialog::backdrop{background:#0008}
+dialog h2{font:700 18px Georgia,serif;margin:0 0 4px}
+dialog p{margin:0 0 10px;color:var(--mut);font-size:13px}
+#cities{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto}
+#cities li{display:flex;gap:4px}
+#cities li button:first-child{flex:1;text-align:left}
+#cities li.cur button:first-child{background:var(--acc);color:var(--accink);border-color:var(--acc)}
+.row{display:flex;gap:8px;justify-content:flex-end}
+#zoom{position:absolute;right:8px;bottom:8px;display:flex;flex-direction:column;gap:4px}
+#zoom button{width:36px;height:36px;padding:0;font-size:20px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Мой город</h1><span id="cname"></span>
+  <button data-t="move" class="on">Рука</button>
+  <button data-t="road">Дорога</button>
+  <button data-t="bld">Здание</button>
+  <button data-t="stop">Остановка</button>
+  <button data-t="route">Маршрут</button>
+  <button data-t="erase">Ластик</button>
+  <select id="type" aria-label="Тип"></select>
+  <button id="done" hidden>Готово</button>
+  <span class="sep"></span>
+  <button id="snap" class="on">Сетка</button>
+  <button id="undo">Отмена</button>
+  <button id="exp">Сохранить файл</button>
+  <button id="imp">Открыть файл</button>
+  <button id="clr">Очистить</button>
+  <button id="set">Настройки</button>
+  <input id="file" type="file" accept="application/json" hidden>
+</header>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="hint"></div>
+  <div id="legend"></div>
+  <div id="zoom"><button id="zi" aria-label="Приблизить">+</button><button id="zo" aria-label="Отдалить">−</button></div>
+</div>
+<dialog id="dlg">
+  <h2>Настройки</h2>
+  <p>Мои города. Всё сохраняется в этом браузере автоматически.</p>
+  <ul id="cities"></ul>
+  <div class="row"><button id="newc" class="on">Новый город</button><button id="close">Закрыть</button></div>
+</dialog>
+<script>
+const $=s=>document.querySelector(s), cv=$('#c'), ctx=cv.getContext('2d');
+const EMPTY=()=>({roads:[],blds:[],stops:[],routes:[],id:1});
+function rd(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}}
+function wr(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+let idx=rd('citymap:index');
+if(!idx){const old=rd('citymap');idx={cur:'c1',list:[{id:'c1',name:'Мой город'}]};wr('citymap:c1',old||EMPTY());wr('citymap:index',idx)}
+let S=rd('citymap:'+idx.cur)||EMPTY(), hist=[], V={x:60,y:60,k:1};
+let tool='move', cur=null, drag=null, mouse=[0,0], snapOn=true, dirty=true, pan=null;
+const ROAD=[['Улица',0],['Проспект',1],['Шоссе',2]], RW=[7,13,20], RC=['#ffffff','#ffe9a8','#f6b26b'];
+const BLD={house:['Дом','#e8b4a0',28],shop:['Магазин','#f2c94c',40],office:['Офис','#8fb4e8',50],industry:['Завод','#b9b3ad',80],park:['Парк','#9bd18b',120],water:['Вода','#7fc3e8',140]};
+const ROUTE_COLORS=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c0a000'];
+const HINT={move:'Тяните карту, колесо мыши — масштаб.',road:'Нажимайте, чтобы ставить точки дороги. Двойной клик или «Готово» — закончить.',bld:'Нажмите, чтобы поставить здание, или протяните, чтобы задать размер.',stop:'Нажмите на карту, чтобы поставить остановку.',route:'Нажимайте остановки по порядку, затем «Готово». Нажмите на первую остановку снова, чтобы замкнуть кольцо.',erase:'Нажмите на объект, чтобы удалить.'};
+
+function save(){wr('citymap:'+idx.cur,S)}
+function push(){hist.push(JSON.stringify(S));if(hist.length>60)hist.shift()}
+function changed(){save();legend();dirty=true}
+
+function setTool(t){
+  tool=t;cur=null;drag=null;
+  document.querySelectorAll('[data-t]').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  const sel=$('#type');
+  sel.hidden=!(t==='road'||t==='bld');
+  sel.innerHTML=t==='road'?ROAD.map(r=>`<option value="${r[1]}">${r[0]}</option>`).join(''):Object.entries(BLD).map(([k,v])=>`<option value="${k}">${v[0]}</option>`).join('');
+  $('#done').hidden=!(t==='road'||t==='route');
+  $('#hint').textContent=HINT[t];dirty=true;
+}
+document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>setTool(b.dataset.t));
+
+function resize(){const r=cv.getBoundingClientRect(),d=devicePixelRatio||1;cv.width=r.width*d;cv.height=r.height*d;dirty=true}
+addEventListener('resize',resize);
+
+function world(e){let x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k;if(snapOn){x=Math.round(x/10)*10;y=Math.round(y/10)*10}return[x,y]}
+function dseg(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy)}
+function stopAt(p,r=12){const k=r/V.k;return S.stops.find(s=>Math.hypot(s.x-p[0],s.y-p[1])<k)}
+function stopById(id){return S.stops.find(s=>s.id===id)}
+
+function finish(){
+  if(tool==='road'&&cur&&cur.pts.length>1){push();S.roads.push(cur);changed()}
+  if(tool==='route'&&cur&&cur.s.length>1){
+    const n=prompt('Название маршрута:','Автобус '+(S.routes.length+1));
+    if(n!==null){push();S.routes.push({n:n||'Маршрут',c:ROUTE_COLORS[S.routes.length%ROUTE_COLORS.length],s:cur.s,loop:cur.loop});changed()}
+  }
+  cur=null;dirty=true;
+}
+$('#done').onclick=finish;
+addEventListener('keydown',e=>{if(e.key==='Enter')finish();if(e.key==='Escape'){cur=null;drag=null;dirty=true}if((e.ctrlKey||e.metaKey)&&e.key==='z')undo()});
+
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId);
+  const p=world(e);
+  if(tool==='move'||e.button===1){pan={x:e.clientX-V.x,y:e.clientY-V.y};return}
+  if(tool==='road'){
+    if(!cur)cur={pts:[p],t:+$('#type').value};
+    else{const l=cur.pts[cur.pts.length-1];if(Math.hypot(l[0]-p[0],l[1]-p[1])<6/V.k)finish();else cur.pts.push(p)}
+  }else if(tool==='bld'){drag={a:p,b:p}}
+  else if(tool==='stop'){const n=prompt('Название остановки:','Остановка '+S.id);if(n!==null){push();S.stops.push({id:S.id++,x:p[0],y:p[1],n:n||'Остановка'});changed()}}
+  else if(tool==='route'){
+    const s=stopAt([(e.offsetX-V.x)/V.k,(e.offsetY-V.y)/V.k]);
+    if(s){if(!cur)cur={s:[s.id]};else if(s.id===cur.s[0]&&cur.s.length>2){cur.loop=true;finish()}else if(s.id!==cur.s[cur.s.length-1])cur.s.push(s.id)}
+  }else if(tool==='erase')erase([(e.offsetX-V.x)/V.k,(e.offsetY-V.y)/V.k]);
+  dirty=true;
+});
+cv.addEventListener('pointermove',e=>{
+  mouse=world(e);
+  if(pan){V.x=e.clientX-pan.x;V.y=e.clientY-pan.y}
+  if(drag)drag.b=mouse;
+  dirty=true;
+});
+cv.addEventListener('pointerup',()=>{
+  pan=null;
+  if(drag){
+    const t=$('#type').value||'house',a=drag.a,b=drag.b;let w=Math.abs(b[0]-a[0]),h=Math.abs(b[1]-a[1]),x=Math.min(a[0],b[0]),y=Math.min(a[1],b[1]);
+    if(w<8&&h<8){w=h=BLD[t][2];x=a[0]-w/2;y=a[1]-h/2}
+    push();S.blds.push({x,y,w,h,t});drag=null;changed();
+  }
+});
+cv.addEventListener('wheel',e=>{e.preventDefault();zoomAt(e.offsetX,e.offsetY,e.deltaY<0?1.15:1/1.15)},{passive:false});
+function zoomAt(x,y,f){const k=Math.max(.2,Math.min(5,V.k*f));f=k/V.k;V.x=x-(x-V.x)*f;V.y=y-(y-V.y)*f;V.k=k;dirty=true}
+$('#zi').onclick=()=>zoomAt(cv.clientWidth/2,cv.clientHeight/2,1.3);
+$('#zo').onclick=()=>zoomAt(cv.clientWidth/2,cv.clientHeight/2,1/1.3);
+
+function erase(p){
+  const r=8/V.k;
+  let s=stopAt(p);
+  if(s){push();S.stops=S.stops.filter(x=>x!==s);S.routes.forEach(R=>R.s=R.s.filter(i=>i!==s.id));S.routes=S.routes.filter(R=>R.s.length>1);return changed()}
+  const ri=S.routes.findIndex(R=>R.s.some((id,i,a)=>{const n=a[i+1]??(R.loop?a[0]:null);if(n==null)return false;const A=stopById(id),B=stopById(n);return A&&B&&dseg(p,[A.x,A.y],[B.x,B.y])<r}));
+  if(ri>=0){push();S.routes.splice(ri,1);return changed()}
+  const bi=S.blds.findLastIndex(b=>p[0]>=b.x&&p[0]<=b.x+b.w&&p[1]>=b.y&&p[1]<=b.y+b.h);
+  if(bi>=0){push();S.blds.splice(bi,1);return changed()}
+  const di=S.roads.findLastIndex(R=>R.pts.some((q,i)=>i&&dseg(p,R.pts[i-1],q)<RW[R.t]/2+r/2));
+  if(di>=0){push();S.roads.splice(di,1);changed()}
+}
+function undo(){if(hist.length){S=JSON.parse(hist.pop());changed()}}
+$('#undo').onclick=undo;
+$('#snap').onclick=e=>{snapOn=!snapOn;e.target.classList.toggle('on',snapOn)};
+$('#clr').onclick=()=>{if(confirm('Удалить весь город?')){push();S=EMPTY();changed()}};
+$('#exp').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download='moi-gorod.json';a.click()};
+$('#imp').onclick=()=>$('#file').click();
+$('#file').onchange=e=>{const f=e.target.files[0];if(!f)return;f.text().then(t=>{try{const d=JSON.parse(t);if(!d.roads||!d.blds)throw 0;push();S=d;changed()}catch(x){alert('Не удалось прочитать файл карты.')}});e.target.value=''};
+
+function legend(){
+  const L=$('#legend');L.style.display=S.routes.length?'block':'none';
+  L.innerHTML=S.routes.map(r=>`<div><i style="background:${r.c}"></i>${r.n.replace(/</g,'&lt;')}</div>`).join('');
+}
+
+function line(pts,w,c,dash){ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.lineWidth=w;ctx.strokeStyle=c;ctx.setLineDash(dash||[]);ctx.stroke();ctx.setLineDash([])}
+function rect(b,ghost){const c=BLD[b.t]||BLD.house;ctx.globalAlpha=ghost?.6:1;ctx.fillStyle=c[1];ctx.fillRect(b.x,b.y,b.w,b.h);if(b.t!=='water'&&b.t!=='park'){ctx.strokeStyle='#00000055';ctx.lineWidth=1.5;ctx.strokeRect(b.x,b.y,b.w,b.h)}ctx.globalAlpha=1}
+function stopPts(R){const a=R.s.map(stopById).filter(Boolean).map(s=>[s.x,s.y]);if(R.loop&&a.length)a.push(a[0]);return a}
+
+function draw(){
+  const d=devicePixelRatio||1,W=cv.width/d,H=cv.height/d;
+  ctx.setTransform(d,0,0,d,0,0);
+  ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--map');ctx.fillRect(0,0,W,H);
+  ctx.save();ctx.translate(V.x,V.y);ctx.scale(V.k,V.k);ctx.lineCap='round';ctx.lineJoin='round';
+  const x0=-V.x/V.k,y0=-V.y/V.k,x1=x0+W/V.k,y1=y0+H/V.k;
+  ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--grid');ctx.lineWidth=1/V.k;ctx.beginPath();
+  for(let x=Math.floor(x0/50)*50;x<x1;x+=50){ctx.moveTo(x,y0);ctx.lineTo(x,y1)}
+  for(let y=Math.floor(y0/50)*50;y<y1;y+=50){ctx.moveTo(x0,y);ctx.lineTo(x1,y)}
+  ctx.stroke();
+  S.blds.filter(b=>b.t==='water'||b.t==='park').forEach(b=>rect(b));
+  S.roads.forEach(R=>{line(R.pts,RW[R.t]+3,'#7d838c');});
+  S.roads.forEach(R=>{line(R.pts,RW[R.t],RC[R.t]);if(R.t)line(R.pts,1,'#9a8f6a',[6,6])});
+  S.blds.filter(b=>b.t!=='water'&&b.t!=='park').forEach(b=>rect(b));
+  S.routes.forEach(R=>{ctx.globalAlpha=.85;line(stopPts(R),4,R.c);ctx.globalAlpha=1});
+  if(cur&&cur.pts){const pts=cur.pts.concat([mouse]);line(pts,RW[cur.t]+3,'#7d838c');line(pts,RW[cur.t],RC[cur.t])}
+  if(cur&&cur.s){const pts=stopPts(cur).concat([mouse]);line(pts,4,'#d7263d',[8,6])}
+  if(drag){const t=$('#type').value||'house';rect({x:Math.min(drag.a[0],drag.b[0]),y:Math.min(drag.a[1],drag.b[1]),w:Math.abs(drag.b[0]-drag.a[0]),h:Math.abs(drag.b[1]-drag.a[1]),t},true)}
+  S.stops.forEach(s=>{ctx.beginPath();ctx.arc(s.x,s.y,6,0,7);ctx.fillStyle='#fff';ctx.fill();ctx.lineWidth=2.5;ctx.strokeStyle='#23262b';ctx.stroke();
+    if(V.k>.6){ctx.font='600 12px Trebuchet MS,sans-serif';ctx.lineWidth=3;ctx.strokeStyle='#ffffffdd';ctx.strokeText(s.n,s.x+9,s.y+4);ctx.fillStyle='#23262b';ctx.fillText(s.n,s.x+9,s.y+4)}});
+  ctx.restore();
+}
+(function loop(){if(dirty){dirty=false;draw()}requestAnimationFrame(loop)})();
+const esc=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const curName=()=>idx.list.find(c=>c.id===idx.cur).name;
+function renderCities(){
+  $('#cname').textContent=curName();
+  $('#cities').innerHTML=idx.list.map(c=>`<li class="${c.id===idx.cur?'cur':''}"><button data-o="${c.id}">${esc(c.name)}</button><button data-r="${c.id}" aria-label="Переименовать">✎</button><button data-d="${c.id}" aria-label="Удалить">✕</button></li>`).join('');
+}
+function openCity(id){
+  save();idx.cur=id;wr('citymap:index',idx);
+  S=rd('citymap:'+id)||EMPTY();hist=[];cur=null;drag=null;V={x:60,y:60,k:1};
+  renderCities();legend();dirty=true;
+}
+function newCity(){
+  const n=prompt('Название нового города:','Город '+(idx.list.length+1));
+  if(n===null)return;
+  const id='c'+Date.now();
+  idx.list.push({id,name:n||'Новый город'});wr('citymap:'+id,EMPTY());openCity(id);
+}
+$('#set').onclick=()=>{renderCities();$('#dlg').showModal()};
+$('#close').onclick=()=>$('#dlg').close();
+$('#newc').onclick=()=>{newCity();$('#dlg').close()};
+$('#cities').onclick=e=>{
+  const b=e.target.closest('button');if(!b)return;
+  const o=b.dataset.o,r=b.dataset.r,d=b.dataset.d;
+  if(o){openCity(o);$('#dlg').close()}
+  if(r){const c=idx.list.find(x=>x.id===r),n=prompt('Новое название:',c.name);if(n){c.name=n;wr('citymap:index',idx);renderCities()}}
+  if(d){
+    const c=idx.list.find(x=>x.id===d);
+    if(!confirm('Удалить город «'+c.name+'» насовсем?'))return;
+    try{localStorage.removeItem('citymap:'+d)}catch(x){}
+    idx.list=idx.list.filter(x=>x.id!==d);
+    if(!idx.list.length){idx.list.push({id:'c'+Date.now(),name:'Мой город'});wr('citymap:'+idx.list[0].id,EMPTY())}
+    if(d===idx.cur)openCity(idx.list[0].id);else{wr('citymap:index',idx);renderCities()}
+  }
+};
+resize();setTool('move');legend();renderCities();
+</script>
+</body>
+</html>
