@@ -100,7 +100,7 @@ function wr(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
 let idx=rd('citymap:index');
 if(!idx){const old=rd('citymap');idx={cur:'c1',list:[{id:'c1',name:'Мой город'}]};wr('citymap:c1',old||EMPTY());wr('citymap:index',idx)}
 let S=norm(rd('citymap:'+idx.cur)||EMPTY()),hist=[],V={x:60,y:60,k:1};
-let tool='select',tt=0,cur=null,drag=null,mouse=[0,0],snapOn=true,dirty=true,pan=null,sel=null;
+let tool='select',tt=0,cur=null,drag=null,mouse=[0,0],snapOn=true,dirty=true,pan=null,sel=null,extR=null;
 const ROAD=['Улица','Проспект','Шоссе'],RW=[12,18,26];
 const BLD={house:['Жилой дом','#f0c3a8',30],shop:['Магазин','#f5d76e',44],office:['Офис','#9fc0ea',56],industry:['Завод','#c4bfb8',90],park:['Парк','#a8d89a',130],water:['Водоём','#86c5ea',150]};
 const RC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'],DC=['#e76f51','#2a9d8f','#e9c46a','#6c8ead','#9b5de5','#43aa8b'];
@@ -108,7 +108,7 @@ const KN={roads:'Дорога',blds:'Здание',stops:'Остановка',de
 const LIGHT={bg:'#eef0ea',grid:'#0000000c',cas:['#c9c4b8','#d2ad4a','#cf7f22'],fil:['#fff','#fff1c2','#ffd48f'],lab:'#4c545b',ink:'#14232b',wh:'#fff'};
 const DARK={bg:'#20262a',grid:'#ffffff0d',cas:['#11161a','#5e4f26','#6e4414'],fil:['#394147','#574b2c','#68451f'],lab:'#cfd6da',ink:'#e6eef0',wh:'#0d1214'};
 const dk=matchMedia('(prefers-color-scheme: dark)');dk.onchange=()=>dirty=true;
-const HINT={select:'Нажмите на объект, чтобы изменить. Тяните карту, чтобы двигать.',erase:'Нажмите на объект, чтобы удалить.',road:'Ставьте точки дороги. Двойной клик или «Готово» — закончить.',bld:'Нажмите, чтобы поставить, или протяните для размера.',stop:'Нажмите на карту, чтобы поставить остановку.',depot:'Нажмите на карту, чтобы поставить АТП.',route:'Нажимайте остановки по порядку. Первая остановка ещё раз — замкнуть кольцо.',dist:'Обведите район точками. Двойной клик или «Готово» — закончить.'};
+const HINT={select:'Нажмите на объект, чтобы изменить. Тяните карту, чтобы двигать.',erase:'Нажмите на объект, чтобы удалить.',road:'Ставьте точки дороги. Двойной клик или «Готово» — закончить.',ext:'Нажмите рядом с концом улицы, которую продлеваете, и ставьте точки. Двойной клик или «Готово» — закончить.',bld:'Нажмите, чтобы поставить, или протяните для размера.',stop:'Нажмите на карту, чтобы поставить остановку.',depot:'Нажмите на карту, чтобы поставить АТП.',route:'Нажимайте остановки по порядку. Первая остановка ещё раз — замкнуть кольцо.',dist:'Обведите район точками. Двойной клик или «Готово» — закончить.'};
 const TREE=[['Дороги',[['Улица','road',0],['Проспект','road',1],['Шоссе','road',2]]],['Здания',[['Жилой дом','bld','house'],['Магазин','bld','shop'],['Офис','bld','office'],['Завод','bld','industry']]],['Природа',[['Парк','bld','park'],['Водоём','bld','water']]],['Районы',[['Район','dist']]],['Транспорт',[['Автобусный транспорт',[['АТП','depot'],['Остановка','stop'],['Маршрут','route']]]]]];
 const chip0=n=>n[1]==='road'?['#9aa3a8','#e0c36a','#e59a3a'][n[2]]:n[1]==='bld'?BLD[n[2]][1]:n[1]==='dist'?DC[1]:n[1]==='route'?RC[0]:'#0c8a86';
 const chip=n=>n[3]||chip0(n);
@@ -138,6 +138,14 @@ function del(k,o){
 }
 function finish(){
   const c=cur;cur=null;if(!c){return}
+  if(tool==='ext'){
+    if(extR&&c.pts&&c.pts.length>1){
+      push();const q=c.pts.slice(1);
+      extR.pts=c.st?q.reverse().concat(extR.pts):extR.pts.concat(q);
+      const R=extR;extR=null;changed();setTool('select');sel={k:'roads',o:R};
+    }
+    updateUI();dirty=true;return;
+  }
   if(tool==='road'&&c.pts.length>1)add('roads',{pts:c.pts,t:tt,n:ROAD[tt]+' '+(S.roads.length+1)});
   else if(tool==='dist'&&c.pts.length>2)add('dists',{pts:c.pts,c:DC[S.dists.length%6],n:'Район '+(S.dists.length+1)});
   else if(tool==='route'&&c.s.length>1)add('routes',{n:'Маршрут '+(S.routes.length+1),c:RC[S.routes.length%6],s:c.s,loop:!!c.loop,d:S.depots[0]?S.depots[0].id:null});
@@ -172,6 +180,19 @@ cv.addEventListener('pointerdown',e=>{
   const r=raw(e),p=snp(r);
   if(tool==='select'){pan={sx:e.clientX,sy:e.clientY,x:V.x,y:V.y,m:false};return}
   if(tool==='erase'){const h=pick(r,true);if(h)del(h.k,h.o);return}
+  if(tool==='ext'){
+    if(!extR||!S.roads.includes(extR))return;
+    const a=extR.pts[0],b=extR.pts[extR.pts.length-1];
+    if(!cur){
+      const st=Math.hypot(a[0]-r[0],a[1]-r[1])<Math.hypot(b[0]-r[0],b[1]-r[1]),e0=st?a:b;
+      cur={pts:[e0.slice()],st};
+      if(Math.hypot(e0[0]-p[0],e0[1]-p[1])>=6/V.k)cur.pts.push(p);
+    }else{
+      const l=cur.pts[cur.pts.length-1];
+      if(Math.hypot(l[0]-p[0],l[1]-p[1])<6/V.k)finish();else cur.pts.push(p);
+    }
+    updateUI();dirty=true;return;
+  }
   if(City.tools[tool]){City.tools[tool](p,r,e);updateUI();dirty=true;return}
   if(tool==='road'||tool==='dist'){
     if(!cur)cur={pts:[p]};
@@ -216,7 +237,7 @@ function updateUI(){
   if(!sel||cur)return;
   const{k,o}=sel;
   let h=`<h3>${KN[k]}</h3><label>Название<input id="f-n" value="${esc(o.n)}" placeholder="${k==='blds'?'Без названия':''}"></label>`;
-  if(k==='roads')h+=`<label>Тип<select id="f-t">${ROAD.map((r,i)=>`<option value="${i}" ${o.t===i?'selected':''}>${r}</option>`).join('')}</select></label>`;
+  if(k==='roads')h+=`<label>Тип<select id="f-t">${ROAD.map((r,i)=>`<option value="${i}" ${o.t===i?'selected':''}>${r}</option>`).join('')}</select></label><button id="f-ext" class="b">Продлить улицу</button>`;
   if(k==='blds')h+=`<label>Тип<select id="f-t">${Object.entries(BLD).map(([a,b])=>`<option value="${a}" ${o.t===a?'selected':''}>${b[0]}</option>`).join('')}</select></label>`;
   if(k==='routes')h+=`<label>АТП<select id="f-dp"><option value="">Не выбран</option>${S.depots.map(d=>`<option value="${d.id}" ${o.d===d.id?'selected':''}>${esc(d.n)}</option>`).join('')}</select></label><label>Цвет${sw(RC,o.c)}</label>`;
   if(k==='dists')h+=`<label>Цвет${sw(DC,o.c)}</label>`;
@@ -233,6 +254,7 @@ I.addEventListener('change',e=>{const i=e.target.id,o=sel.o;push();
   if(i==='f-dp')o.d=e.target.value?+e.target.value:null;changed()});
 I.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
   if(b.id==='f-del')del(sel.k,sel.o);else if(b.id==='f-ok'){sel=null;updateUI();dirty=true}
+  else if(b.id==='f-ext'){const R=sel.o;setTool('ext');extR=R;sel=null;updateUI();dirty=true}
   else if(b.dataset.c){push();sel.o.c=b.dataset.c;changed();updateUI()}});
 function legend(){
   const L=$('#legend');L.hidden=!S.routes.length;
@@ -316,10 +338,11 @@ function draw(){
     else if(k==='stops'||k==='depots'){ctx.beginPath();ctx.arc(o.x,o.y,18,0,7);ctx.fillStyle=A;ctx.fill()}
     else if(k==='blds'){ctx.strokeStyle='#0c8a86';ctx.lineWidth=3;ctx.strokeRect(o.x-3,o.y-3,o.w+6,o.h+6)}
     else if(k==='dists'){poly(o.pts);ctx.strokeStyle='#0c8a86';ctx.lineWidth=4;ctx.stroke()}}
+  if(tool==='ext'&&extR&&!cur)line(extR.pts,RW[extR.t]+12,'#0c8a8670');
   S.routes.forEach(R=>{const pts=stopPts(R),dp=S.depots.find(x=>x.id===R.d);
     if(dp&&pts.length)line([[dp.x,dp.y],pts[0]],2.5,R.c,[3,6]);
     line(pts,9,P.wh);line(pts,5.5,R.c)});
-  if(cur&&cur.pts&&tool==='road'){const p=cur.pts.concat([mouse]);ctx.globalAlpha=.7;line(p,RW[tt]+4,P.cas[tt]);line(p,RW[tt],P.fil[tt]);ctx.globalAlpha=1}
+  if(cur&&cur.pts&&(tool==='road'||(tool==='ext'&&extR))){const T=tool==='ext'?extR.t:tt,p=cur.pts.concat([mouse]);ctx.globalAlpha=.7;line(p,RW[T]+4,P.cas[T]);line(p,RW[T],P.fil[T]);ctx.globalAlpha=1}
   if(cur&&cur.pts&&tool==='dist'){const p=cur.pts.concat([mouse]);line(p,2.5,'#0c8a86',[8,6])}
   if(cur&&cur.s)line(stopPts(cur).concat([mouse]),4,'#0c8a86',[8,6]);
   if(drag)rect({x:Math.min(drag.a[0],drag.b[0]),y:Math.min(drag.a[1],drag.b[1]),w:Math.abs(drag.b[0]-drag.a[0]),h:Math.abs(drag.b[1]-drag.a[1]),t:tt},true);
@@ -343,7 +366,7 @@ function register(d){
   if(d.inspector)City.insp[d.key]=d.inspector;
   dirty=true;updateUI();
 }
-Object.assign(City,{KN,HINT,esc,push,add,del,changed,updateUI,addLeaf,register,redraw:()=>dirty=true});
+Object.assign(City,{KN,HINT,esc,push,add,del,changed,updateUI,addLeaf,register,redraw:()=>dirty=true,select:(k,o)=>{sel={k,o}}});
 function resize(){const r=cv.getBoundingClientRect(),d=devicePixelRatio||1;cv.width=r.width*d;cv.height=r.height*d;dirty=true}
 new ResizeObserver(resize).observe($('#wrap'));
 if(document.fonts)document.fonts.ready.then(()=>dirty=true);
@@ -455,7 +478,7 @@ City.register({
 
   /* притягивание точек новой дороги к существующим: сначала к точкам и концам, потом к линии */
   City.snap=(q,r)=>{
-    tgt=null;if(City.tool!=='road')return q;
+    tgt=null;if(City.tool!=='road'&&City.tool!=='ext')return q;
     const roads=City.S.roads,k=City.view.k;let best=null;
     roads.forEach(R=>R.pts.forEach(p=>{const d=Math.hypot(p[0]-r[0],p[1]-r[1]);if(d<16/k&&(!best||d<best.d))best={d,p}}));
     if(!best)roads.forEach(R=>R.pts.slice(1).forEach((b,i)=>{const x=proj(r,R.pts[i],b);if(x.d<10/k&&(!best||x.d<best.d))best={d:x.d,p:x.q}}));
@@ -467,7 +490,7 @@ City.register({
     const g=get();
     g.e.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],5,0,7);ctx.fillStyle=P.wh;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=P.ink;ctx.stroke()});
     g.j.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],4.5,0,7);ctx.fillStyle='#0c8a86';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=P.wh;ctx.stroke()});
-    if(tgt&&City.tool==='road'){ctx.beginPath();ctx.arc(tgt[0],tgt[1],12,0,7);ctx.lineWidth=2.5;ctx.strokeStyle='#0c8a86';ctx.stroke()}
+    if(tgt&&(City.tool==='road'||City.tool==='ext')){ctx.beginPath();ctx.arc(tgt[0],tgt[1],12,0,7);ctx.lineWidth=2.5;ctx.strokeStyle='#0c8a86';ctx.stroke()}
   });
 })();
 </script>
@@ -611,6 +634,30 @@ City.register({
     [['С',0,-26],['Ю',0,26],['В',26,0],['З',-26,0]].forEach(([t,x,y])=>ctx.fillText(t,cx+x,cy+y));
     ctx.restore();
   });
+})();
+</script>
+<script>
+/* Плагин: одинаковые тип и название + общая конечная точка = одна улица (автопродление) */
+(function(){
+  const same=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1])<1;
+  function merge(){
+    const s=City.sel;if(!s||s.k!=='roads')return;
+    const o=s.o,S=City.S;if(!o.n||!o.n.trim())return;
+    for(const R of S.roads){
+      if(R===o||R.t!==o.t||R.n!==o.n)continue;
+      const a=R.pts,b=o.pts,A0=a[0],A1=a[a.length-1],B0=b[0],B1=b[b.length-1];
+      let pts=null;
+      if(same(A1,B0))pts=a.concat(b.slice(1));
+      else if(same(A1,B1))pts=a.concat(b.slice().reverse().slice(1));
+      else if(same(A0,B1))pts=b.concat(a.slice(1));
+      else if(same(A0,B0))pts=b.slice().reverse().concat(a.slice(1));
+      if(!pts)continue;
+      R.pts=pts;S.roads=S.roads.filter(x=>x!==o);
+      City.select('roads',R);City.changed();City.updateUI();
+      return;
+    }
+  }
+  $('#insp').addEventListener('change',e=>{if(e.target.id==='f-n'||e.target.id==='f-t')merge()});
 })();
 </script>
 </body>
