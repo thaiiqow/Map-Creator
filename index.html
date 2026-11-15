@@ -1615,8 +1615,8 @@ draw=function(){
   const nv=[],oT=ctx.translate,oP=Array.prototype.push,rr=cv.getBoundingClientRect();let first=true;
   const capture=o=>{
     if(o.c&&o.c.m&&o.c.R&&o.c.li!==undefined&&o.r)oP.call(nv,{k:'car',ref:o.c,x:o.x,y:o.y,r:o.r,name:o.c.m.n});
-    else if(o.b&&o.R&&o.L)oP.call(nv,{k:'bus',ref:o.b,x:o.x,y:o.y,r:Math.max(o.L/2,10),name:o.b.m+' · '+o.R.n});
-    else if(o.f&&o.f.pl&&o.r)oP.call(nv,{k:'air',ref:o.f,x:o.x,y:o.y,r:o.r,name:o.f.pl.m+' · '+o.f.R.n});
+    else if(o.b&&o.R&&o.L)oP.call(nv,{k:'bus',ref:o.b,R:o.R,x:o.x,y:o.y,r:Math.max(o.L/2,10),name:o.b.m+' · '+o.R.n});
+   else if(o.f&&o.f.pl&&o.r)oP.call(nv,{k:'air',ref:o.f,x:o.x,y:o.y,r:o.r,name:o.f.pl.m+' · '+o.f.R.n});
   };
   ctx.translate=function(x,y){
     if(first){first=false;
@@ -1784,6 +1784,9 @@ function popTotal(){
   requestAnimationFrame(frame);
 })();
 City.game={get day(){return gt},get speed(){return speed},setSpeed};
+City.vis=()=>lastVis;
+City.pick=()=>lastPick;
+City.follow=()=>follow;
 dirty=true;
 })();
 </script>
