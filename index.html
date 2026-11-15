@@ -471,5 +471,147 @@ City.register({
   });
 })();
 </script>
+<script>
+/* Плагин: масштаб, линейка, координаты, компас, граница города, население, автобусы */
+(function(){
+  const mpu=()=>((City.S.scale||50)/50);                       /* метров в одной единице карты */
+  const fm=u=>{const m=Math.abs(u*mpu()),g=u<0?'−':'';return g+(m<1000?Math.round(m)+' м':(m/1000).toFixed(2).replace('.',',')+' км')};
+  const len=a=>a.slice(1).reduce((s,p,i)=>s+Math.hypot(p[0]-a[i][0],p[1]-a[i][1]),0);
+  const area=a=>Math.abs(a.reduce((s,p,i)=>{const q=a[(i+1)%a.length];return s+p[0]*q[1]-q[0]*p[1]},0))/2;
+  const n0=v=>Math.round(v).toLocaleString('ru-RU');
+  const pp=(ctx,a)=>{ctx.beginPath();a.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]))};
+  const dseg=(p,a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy)};
+  const F='Manrope,system-ui,sans-serif';
+  let M=[0,0],ruler=[],bd=null,showXY=true,run=true,clock=0,last=performance.now(),bpos=[];
+
+  /* ---------- панель и окно автобуса ---------- */
+  document.head.insertAdjacentHTML('beforeend','<style>#p2{left:10px;top:56px;padding:8px 10px;display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;max-width:340px;font-size:13px}#p2 input{width:60px;margin:0 3px}#pop{left:10px;top:130px;width:250px;padding:12px}#pop img{width:100%;border-radius:8px;display:block;margin:8px 0}</style>');
+  $('#wrap').insertAdjacentHTML('beforeend','<div id="p2" class="fl"><span>1 клетка =<input id="sc" type="number" min="1">м</span><button id="rr" class="b">Сбросить линейку</button><button id="xy" class="b on">Координаты</button><button id="bs" class="b on">Автобусы</button><span id="mx" style="color:var(--mut)"></span><b id="tot"></b></div><div id="pop" class="fl" hidden></div>');
+  $('#sc').onchange=e=>{const v=+e.target.value;if(v>0){City.push();City.S.scale=v;City.changed()}};
+  $('#rr').onclick=()=>{ruler=[];bd=null;City.redraw()};
+  $('#xy').onclick=e=>{showXY=!showXY;e.currentTarget.classList.toggle('on',showXY);City.redraw()};
+  $('#bs').onclick=e=>{run=!run;e.currentTarget.classList.toggle('on',run)};
+  cv.addEventListener('pointermove',e=>{const V=City.view;M=[(e.offsetX-V.x)/V.k,(e.offsetY-V.y)/V.k];$('#mx').textContent='X '+fm(M[0])+', Y '+fm(-M[1])});
+
+  /* ---------- линейка ---------- */
+  City.HINT.ruler='Нажимайте точки на карте: длина покажется в метрах и километрах.';
+  City.tools.ruler=p=>{ruler.push(p)};
+  City.addLeaf('Измерения',['Линейка','ruler','','#e9c46a']);
+  City.insp.roads=o=>`<div style="font-size:13px;color:var(--mut)">Длина: <b style="color:var(--ink)">${fm(len(o.pts))}</b></div>`;
+
+  /* ---------- граница города ---------- */
+  City.HINT.bound='Обведите город точками. Нажмите на первую точку или дважды на последнюю — готово.';
+  const endB=()=>{if(bd&&bd.length>2)City.add('bounds',{pts:bd,n:'Граница города'});bd=null};
+  City.tools.bound=p=>{
+    if(!bd){bd=[p];return}
+    const k=City.view.k,f=bd[0],l=bd[bd.length-1];
+    if(bd.length>2&&(Math.hypot(f[0]-p[0],f[1]-p[1])<14/k||Math.hypot(l[0]-p[0],l[1]-p[1])<6/k))endB();else bd.push(p);
+  };
+  addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;if(e.key==='Enter'&&City.tool==='bound')endB();if(e.key==='Escape')bd=null});
+  City.register({key:'bounds',label:'Граница города',
+    hit(p,r){return City.S.bounds.find(b=>b.pts.some((q,i)=>dseg(p,q,b.pts[(i+1)%b.pts.length])<r+3))}});
+  City.addLeaf('Районы',['Граница города','bound','','#c0392b']);
+
+  /* ---------- население районов ---------- */
+  City.insp.dists=o=>`<label>Население, чел.<input type="number" min="0" data-f="pop" value="${City.esc(o.pop||'')}"></label><div style="font-size:13px;color:var(--mut)">Площадь: <b style="color:var(--ink)">${(area(o.pts)*mpu()*mpu()/1e6).toFixed(2).replace('.',',')} км²</b></div>`;
+
+  /* ---------- автобусы ---------- */
+  /* Добавляйте модели сюда: 'Название':{img:'файл.png', l:длина в метрах} */
+  const MODELS={'MAZ 206.948':{img:'maz206_948.png',l:12}};
+  const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
+  const pathOf=R=>{const b=R=>{const a=R.s.map(i=>City.S.stops.find(s=>s.id===i)).filter(Boolean).map(s=>[s.x,s.y]);if(R.loop&&a.length)a.push(a[0]);return a};return City.path?City.path(R,b):b(R)};
+  const CI=new WeakMap();
+  const info=pts=>{let m=CI.get(pts);if(!m){const c=[0];for(let i=1;i<pts.length;i++)c.push(c[i-1]+Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]));m={c,L:c[c.length-1]};CI.set(pts,m)}return m};
+  function at(pts,d,loop){
+    const m=info(pts);if(pts.length<2||!m.L)return null;
+    const P2=m.L*(loop?1:2);let s=((d%P2)+P2)%P2,rev=false;if(!loop&&s>m.L){s=P2-s;rev=true}
+    let i=1;while(i<m.c.length-1&&m.c[i]<s)i++;
+    const a=pts[i-1],b=pts[i],t=(s-m.c[i-1])/((m.c[i]-m.c[i-1])||1);
+    return{x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t,an:Math.atan2(b[1]-a[1],b[0]-a[0])+(rev?Math.PI:0)};
+  }
+  const rr=(ctx,x,y,w,h,r)=>{ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,w,h,r)};
+  function drawBus(ctx,b,lm,col){
+    const L=Math.max(lm/mpu(),22),W=L*.34;
+    ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.an);ctx.lineWidth=1;ctx.strokeStyle='#0008';
+    rr(ctx,-L/2,-W/2,L,W,W*.2);ctx.fillStyle=col;ctx.fill();ctx.stroke();
+    ctx.fillStyle='#bfe3f2';ctx.fillRect(L*.38,-W*.38,L*.08,W*.76);                       /* лобовое стекло */
+    ctx.fillStyle='#8d979e';ctx.fillRect(-L*.44,-W*.4,L*.32,W*.8);                         /* метановый отсек */
+    ctx.fillStyle='#e9edf0';for(let i=0;i<3;i++){rr(ctx,-L*.42+i*L*.1,-W*.3,L*.07,W*.6,W*.12);ctx.fill();ctx.stroke()}  /* баллоны */
+    rr(ctx,-L*.02,-W*.3,L*.2,W*.6,W*.1);ctx.fillStyle='#fff';ctx.fill();ctx.stroke();      /* кондиционер */
+    ctx.restore();
+  }
+  function showBus(h){
+    const m=MODELS[h.b.m]||{},E=City.esc;
+    $('#pop').innerHTML=`<b>${E(h.b.m)}</b><div style="color:var(--mut)">${E(h.R.n)}</div>`+(m.img?`<img src="${E(m.img)}" alt="${E(h.b.m)}" onerror="this.outerHTML='<small>Нет файла ${E(m.img)} рядом с index.html</small>'">`:'')+'<div class="row"><button id="pc" class="b">Закрыть</button></div>';
+    $('#pop').hidden=false;$('#pc').onclick=()=>$('#pop').hidden=true;
+  }
+  let dn=null;
+  cv.addEventListener('pointerdown',e=>dn=[e.clientX,e.clientY]);
+  cv.addEventListener('pointerup',e=>{
+    if(!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
+    const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k,h=bpos.find(b=>Math.hypot(b.x-x,b.y-y)<Math.max(b.L/2,10));
+    if(h)showBus(h);else $('#pop').hidden=true;
+  });
+  City.insp.routes=o=>{
+    const bs=o.buses||[];
+    return `<div style="font-size:13px;color:var(--mut)">Длина: <b style="color:var(--ink)">${fm(len(pathOf(o)))}</b></div><label>Автобусы на маршруте</label>`
+    +bs.map((b,i)=>`<div class="row" style="justify-content:flex-start;align-items:center;flex-wrap:nowrap"><select data-bi="${i}" data-bf="m" style="flex:1;margin:0">${Object.keys(MODELS).map(k=>`<option ${k===b.m?'selected':''}>${k}</option>`).join('')}</select><input type="color" data-bi="${i}" data-bf="c" value="${b.c}" style="width:44px;margin:0;padding:2px"><button class="b danger" data-bdel="${i}" aria-label="Убрать">✕</button></div>`).join('')
+    +'<button class="b" data-badd="1">+ Добавить автобус</button>';
+  };
+  $('#insp').addEventListener('click',e=>{
+    const b=e.target.closest('button'),o=City.sel&&City.sel.o;if(!b||!o)return;
+    if(b.dataset.badd){City.push();o.buses=o.buses||[];o.buses.push({m:Object.keys(MODELS)[0],c:BC[o.buses.length%6]});City.changed();City.updateUI()}
+    if(b.dataset.bdel&&o.buses){City.push();o.buses.splice(+b.dataset.bdel,1);City.changed();City.updateUI()}
+  });
+  $('#insp').addEventListener('change',e=>{const t=e.target,o=City.sel&&City.sel.o;if(t.dataset.bi!=null&&o&&o.buses){o.buses[+t.dataset.bi][t.dataset.bf]=t.value;City.changed()}});
+  (function loop(){const n=performance.now();if(run)clock+=(n-last)/1000;last=n;if(run&&City.S.routes.some(R=>R.buses&&R.buses.length))City.redraw();requestAnimationFrame(loop)})();
+
+  /* ---------- общий слой рисования ---------- */
+  City.layers.over.push((ctx,P)=>{
+    const S=City.S,V=City.view,k=V.k,d=devicePixelRatio||1,W=cv.width/d,H=cv.height/d;
+    const sc=$('#sc');if(document.activeElement!==sc)sc.value=S.scale||50;
+    /* граница: затемняем всё снаружи */
+    (S.bounds||[]).forEach(b=>{ctx.beginPath();ctx.rect(-1e5,-1e5,2e5,2e5);b.pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.fillStyle='#14232b22';ctx.fill('evenodd')});
+    ctx.lineJoin='round';
+    (S.bounds||[]).forEach(b=>{pp(ctx,b.pts.concat([b.pts[0]]));ctx.lineWidth=3;ctx.strokeStyle='#c0392b';ctx.setLineDash([14,8]);ctx.stroke();ctx.setLineDash([])});
+    if(bd){pp(ctx,bd.concat([M]));ctx.lineWidth=2.5;ctx.strokeStyle='#c0392b';ctx.setLineDash([8,6]);ctx.stroke();ctx.setLineDash([])}
+    /* население */
+    let tot=0;
+    S.dists.forEach(D=>{const pop=+D.pop;if(!pop)return;tot+=pop;
+      const cx=D.pts.reduce((s,p)=>s+p[0],0)/D.pts.length,cy=D.pts.reduce((s,p)=>s+p[1],0)/D.pts.length,km=area(D.pts)*mpu()*mpu()/1e6;
+      ctx.textAlign='center';ctx.textBaseline='middle';ctx.lineWidth=3.5;ctx.strokeStyle=P.bg;
+      [[n0(pop)+' чел.','700 13px '+F,26],[km?n0(pop/km)+' чел/км²':'','600 11px '+F,42]].forEach(([t,f,dy])=>{if(!t)return;ctx.font=f;ctx.strokeText(t,cx,cy+dy);ctx.fillStyle=P.ink;ctx.fillText(t,cx,cy+dy)});
+    });
+    $('#tot').textContent=tot?'Население: '+n0(tot):'';
+    /* линейка */
+    const rp=City.tool==='ruler'&&ruler.length?ruler.concat([M]):ruler;
+    if(rp.length){
+      pp(ctx,rp);ctx.lineWidth=5/k;ctx.strokeStyle='#14232b';ctx.stroke();ctx.lineWidth=3/k;ctx.strokeStyle='#e9c46a';ctx.stroke();
+      ctx.font='700 '+(12/k)+'px '+F;ctx.textAlign='center';ctx.textBaseline='middle';ctx.lineWidth=3.5/k;ctx.strokeStyle=P.bg;
+      rp.forEach((p,i)=>{ctx.beginPath();ctx.arc(p[0],p[1],4/k,0,7);ctx.fillStyle='#e9c46a';ctx.fill();ctx.lineWidth=1.5/k;ctx.strokeStyle='#14232b';ctx.stroke();
+        if(i){const q=rp[i-1],t=fm(Math.hypot(p[0]-q[0],p[1]-q[1])),x=(p[0]+q[0])/2,y=(p[1]+q[1])/2-10/k;ctx.lineWidth=3.5/k;ctx.strokeStyle=P.bg;ctx.strokeText(t,x,y);ctx.fillStyle=P.ink;ctx.fillText(t,x,y)}});
+      const L=len(rp),e=rp[rp.length-1];if(rp.length>1){const t='Всего: '+fm(L);ctx.textAlign='left';ctx.lineWidth=3.5/k;ctx.strokeStyle=P.bg;ctx.strokeText(t,e[0]+8/k,e[1]+14/k);ctx.fillStyle=P.ink;ctx.fillText(t,e[0]+8/k,e[1]+14/k)}
+    }
+    /* автобусы */
+    bpos=[];
+    S.routes.forEach(R=>{const bs=R.buses;if(!bs||!bs.length)return;const pts=pathOf(R),m=info(pts),per=m.L*(R.loop?1:2),v=(30/3.6)*4/mpu();
+      bs.forEach((b,i)=>{const q=at(pts,clock*v+i*per/bs.length,R.loop);if(!q)return;const lm=(MODELS[b.m]||{l:12}).l;drawBus(ctx,q,lm,b.c);bpos.push({x:q.x,y:q.y,L:Math.max(lm/mpu(),22),b,R})});
+    });
+    /* экранные слои: координатная сетка и компас */
+    ctx.save();ctx.setTransform(d,0,0,d,0,0);
+    if(showXY){let s=50;while(s*k<80)s*=2;ctx.font='600 10px '+F;ctx.lineWidth=3;ctx.strokeStyle=P.bg;ctx.fillStyle=P.lab;ctx.textAlign='center';ctx.textBaseline='bottom';
+      for(let wx=Math.ceil(-V.x/k/s)*s;wx*k+V.x<W;wx+=s){const x=wx*k+V.x;if(Math.abs(x-W/2)<150)continue;const t=fm(wx);ctx.strokeText(t,x,H-6);ctx.fillText(t,x,H-6)}
+      ctx.textAlign='left';ctx.textBaseline='middle';
+      for(let wy=Math.ceil(-V.y/k/s)*s;wy*k+V.y<H;wy+=s){const y=wy*k+V.y;if(y<190||y>H-60)continue;const t=fm(-wy);ctx.strokeText(t,6,y);ctx.fillText(t,6,y)}}
+    const cx=W-50,cy=H-64;
+    ctx.beginPath();ctx.arc(cx,cy,34,0,7);ctx.fillStyle=P.bg+'e6';ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle=P.lab;ctx.stroke();
+    ctx.beginPath();ctx.moveTo(cx,cy-18);ctx.lineTo(cx-6,cy);ctx.lineTo(cx+6,cy);ctx.closePath();ctx.fillStyle='#d7263d';ctx.fill();
+    ctx.beginPath();ctx.moveTo(cx,cy+18);ctx.lineTo(cx-6,cy);ctx.lineTo(cx+6,cy);ctx.closePath();ctx.fillStyle=P.lab;ctx.fill();
+    ctx.fillStyle=P.ink;ctx.font='800 11px '+F;ctx.textAlign='center';ctx.textBaseline='middle';
+    [['С',0,-26],['Ю',0,26],['В',26,0],['З',-26,0]].forEach(([t,x,y])=>ctx.fillText(t,cx+x,cy+y));
+    ctx.restore();
+  });
+})();
+</script>
 </body>
 </html>
