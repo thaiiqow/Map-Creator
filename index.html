@@ -381,7 +381,7 @@ function draw(){
     if(k==='roads')line(o.pts,RW[o.t]+12,A);
     else if(k==='routes')line(stopPts(o),14,A);
     else if(k==='stops'||k==='depots'){ctx.beginPath();ctx.arc(o.x,o.y,18,0,7);ctx.fillStyle=A;ctx.fill()}
-    else if(k==='blds'){ctx.strokeStyle='#0c8a86';ctx.lineWidth=3;ctx.strokeRect(o.x-3,o.y-3,o.w+6,o.h+6)}
+    else if(k==='blds'){ctx.strokeStyle='#0c8a86';ctx.lineWidth=4;if(o.pts){poly(o.pts);ctx.stroke()}else{ctx.lineWidth=3;ctx.strokeRect(o.x-3,o.y-3,o.w+6,o.h+6)}}
     else if(k==='dists'){poly(o.pts);ctx.strokeStyle='#0c8a86';ctx.lineWidth=4;ctx.stroke()}}
   if(tool==='ext'&&extR&&!cur)line(extR.pts,RW[extR.t]+12,'#0c8a8670');
   S.routes.forEach(R=>{const pts=stopPts(R),dp=S.depots.find(x=>x.id===R.d);
@@ -997,13 +997,19 @@ City.register({
 
   /* ===== Модели самолётов. Добавляйте авиакомпании/модели сюда: img — файл рядом с index.html, l/sp — длина и размах крыла в метрах ===== */
   const PLANES={
-    'Boeing 737':{l:39.5,sp:35.8,al:{
-      'S7 Airlines':{img:'b737s7.png',fus:'#b6e51c',tail:'#b6e51c',eng:'#3fae3a',wing:'#dfe5e8'},
-      'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
-    'Airbus A321':{l:44.5,sp:35.8,al:{
-      'VietJet':{img:'vja321.png',fus:'#f6f7f7',rear:'#d9232d',tail:'#d9232d',eng:'#d9232d',wing:'#e3e7ea',tip:true},
-      'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}}
-  };
+  'Boeing 737':{l:39.5,sp:35.8,seats:189,al:{
+    'S7 Airlines':{img:'b737s7.png',fus:'#b6e51c',tail:'#b6e51c',eng:'#3fae3a',wing:'#dfe5e8'},
+    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
+  'Airbus A321':{l:44.5,sp:35.8,seats:236,al:{
+    'VietJet':{img:'vja321.png',fus:'#f6f7f7',rear:'#d9232d',tail:'#d9232d',eng:'#d9232d',wing:'#e3e7ea',tip:true},
+    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
+  'Boeing 777':{l:73.9,sp:64.8,seats:400,al:{
+    'Aeroflot':{img:'b777a.png',fus:'#eceff1',tail:'#1b2a6b',eng:'#1b2a6b',wing:'#dfe5e8'},
+    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
+  'Airbus A319':{l:33.8,sp:34.1,seats:156,al:{
+    'Aurora':{img:'aura319.png',fus:'#f6f7f7',rear:'#1c3c8f',tail:'#1c3c8f',eng:'#1f3f94',wing:'#e3e7ea',tip:true,tipc:'#f58220'},
+    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}}
+};
   const MK=Object.keys(PLANES);
   const specOf=pl=>{const m=PLANES[pl.m]||PLANES[MK[0]];return m.al[pl.al]||m.al[Object.keys(m.al)[0]]};
 
@@ -1243,7 +1249,7 @@ City.register({
     [1,-1].forEach(s=>{
       poly([[.1*L,s*W*.4],[-.09*L,s*HS],[-.16*L,s*HS],[-.1*L,s*W*.4]],a.wing);
       poly([[-.4*L,s*W*.3],[-.46*L,s*L*.16],[-.49*L,s*L*.16],[-.47*L,s*W*.3]],a.wing);
-      if(a.tip)poly([[-.1*L,s*HS],[-.14*L,s*(HS+W*.45)],[-.17*L,s*(HS+W*.45)],[-.16*L,s*HS]],a.tail);
+      if(a.tip)poly([[-.1*L,s*HS],[-.14*L,s*(HS+W*.45)],[-.17*L,s*(HS+W*.45)],[-.16*L,s*HS]],a.tipc||a.tail);
       rrect(ctx,.03*L,s*HS*.33-W*.25,.09*L,W*.5,W*.2);ctx.fillStyle=c(a.eng);ctx.fill();if(!sh)ctx.stroke();
     });
     const fus=()=>{ctx.beginPath();ctx.moveTo(.5*L,0);ctx.bezierCurveTo(.5*L,W*.35,.44*L,W/2,.36*L,W/2);ctx.lineTo(-.3*L,W/2);ctx.lineTo(-.5*L,W*.12);ctx.lineTo(-.5*L,-W*.12);ctx.lineTo(-.3*L,-W/2);ctx.lineTo(.36*L,-W/2);ctx.bezierCurveTo(.44*L,-W/2,.5*L,-W*.35,.5*L,0);ctx.closePath()};
@@ -1319,8 +1325,8 @@ City.register({
     if(!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
     const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k,h=[...fpos].reverse().find(q=>Math.hypot(q.x-x,q.y-y)<q.r);
     if(!h)return;
-    const pl=h.f.pl,sp=specOf(pl),name=pl.m+' ('+pl.al+')';
-    $('#pop').innerHTML=`<b>${E(name)}</b><div style="color:var(--mut)">${E(h.f.R.n)}</div>`+(sp.img?`<img src="${E(sp.img)}" alt="${E(name)}" onerror="this.outerHTML='<small>Нет файла ${E(sp.img)} рядом с index.html</small>'">`:'')+'<div class="row"><button id="pc3" class="b">Закрыть</button></div>';
+    const pl=h.f.pl,sp=specOf(pl),name=pl.m+' ('+pl.al+')',seats=(PLANES[pl.m]||PLANES[MK[0]]).seats;
+   $('#pop').innerHTML=`<b>${E(name)}</b><div style="color:var(--mut)">${E(h.f.R.n)}</div>`+(sp.img?`<img src="${E(sp.img)}" alt="${E(name)}" onerror="this.outerHTML='<small>Нет файла ${E(sp.img)} рядом с index.html</small>'">`:'')+'<div class="row"><button id="pc3" class="b">Закрыть</button></div>';
     $('#pop').hidden=false;$('#pc3').onclick=()=>$('#pop').hidden=true;
   });
   (function loop(){
@@ -1805,7 +1811,7 @@ const n0=v=>Math.round(v).toLocaleString('ru-RU');
 const area=a=>Math.abs(a.reduce((s,p,i)=>{const q=a[(i+1)%a.length];return s+p[0]*q[1]-q[0]*p[1]},0))/2;
 
 /* ---------- жители домов ---------- */
-const auto=b=>Math.max(1,Math.round(b.w*b.h*mpu()*mpu()/25));
+const auto=b=>Math.max(1,Math.round((b.pts?area(b.pts):b.w*b.h)*mpu()*mpu()/25));
 const hp=b=>b.t!=='house'?0:(b.pop===undefined||b.pop===''?auto(b):Math.max(0,+b.pop||0));
 City.insp.blds=o=>o.t==='house'?`<label>Жителей<input type="number" min="0" data-f="pop" placeholder="авто (${auto(o)})" value="${o.pop===undefined?'':City.esc(o.pop)}"></label>`:'';
 function zcells(fn){
@@ -1951,6 +1957,74 @@ let at=0;recalc();
   if(!City.follow()&&showRoute){showRoute=false;$('#fol-r').classList.remove('on')}
   requestAnimationFrame(frame);
 })();
+})();
+</script>
+<script>
+/* Плагин: здания, парки, водоёмы, терминалы и т.д. — прямоугольником или контуром */
+(function(){
+  let poly_=false,pts=null;
+  const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+  City.HINT.bld='Прямоугольник: нажмите или протяните. Контур: ставьте точки по углам, первая точка или «Готово» — закончить.';
+  $('#wrap').insertAdjacentHTML('beforeend','<div id="bm" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:112px;padding:4px;display:flex;gap:2px;align-items:center"><button id="bm-r" class="b on">Прямоугольник</button><button id="bm-p" class="b">Контур</button><span id="bm-n" hidden style="padding:0 8px"></span><button id="bm-ok" class="b p" hidden>Готово</button><button id="bm-no" class="b" hidden>Отмена</button></div>');
+  const mode=m=>{poly_=m;pts=null;$('#bm-r').classList.toggle('on',!m);$('#bm-p').classList.toggle('on',m);City.redraw()};
+  $('#bm-r').onclick=()=>mode(false);$('#bm-p').onclick=()=>mode(true);
+  function done(){
+    const a=pts;pts=null;
+    if(a&&a.length>2){
+      const xs=a.map(p=>p[0]),ys=a.map(p=>p[1]),x=Math.min(...xs),y=Math.min(...ys);
+      City.add('blds',{x,y,w:Math.max(...xs)-x,h:Math.max(...ys)-y,t:tt,n:'',pts:a});
+    }
+    City.redraw();
+  }
+  $('#bm-ok').onclick=done;$('#bm-no').onclick=()=>{pts=null;City.redraw()};
+  addEventListener('keydown',e=>{
+    if(e.target.tagName==='INPUT'||City.tool!=='bld')return;
+    if(e.key==='Enter')done();if(e.key==='Escape')pts=null;City.redraw();
+  });
+  City.tools.bld=p=>{
+    if(!poly_){drag={a:p,b:p};return}
+    if(!pts){pts=[p];return}
+    const k=City.view.k,l=pts[pts.length-1],f=pts[0];
+    if(dst(l,p)<6/k||(pts.length>2&&dst(f,p)<12/k))done();else pts.push(p);
+  };
+
+  /* отрисовка контура */
+  const _rect=rect;
+  rect=function(b,ghost){
+    if(!b.pts)return _rect(b,ghost);
+    const c=BLD[b.t]||BLD.house,z=b.t==='water'||b.t==='park';
+    ctx.globalAlpha=ghost?.6:1;
+    if(!z){poly(b.pts.map(p=>[p[0]+2,p[1]+3]));ctx.fillStyle='#0000002a';ctx.fill()}
+    poly(b.pts);ctx.fillStyle=c[1];ctx.fill();
+    ctx.lineWidth=1.5;ctx.strokeStyle=z?(b.t==='water'?'#5aa6d3':'#7fb872'):'#00000066';ctx.stroke();
+    ctx.globalAlpha=1;
+  };
+
+  /* выбор/ластик: контур ловится по своей форме, а не по прямоугольнику вокруг */
+  const _pick=pick;
+  pick=function(p,edge){
+    const orig=S.blds;let h;
+    try{for(;;){
+      h=_pick(p,edge);
+      if(h&&h.k==='blds'&&h.o.pts&&!inPoly(p,h.o.pts)){S.blds=S.blds.filter(b=>b!==h.o);continue}
+      break;
+    }}finally{S.blds=orig}
+    return h;
+  };
+
+  /* панель и набросок */
+  City.layers.over.push(()=>{
+    const on=City.tool==='bld';if(!on)pts=null;
+    $('#bm').hidden=!on;if(!on)return;
+    $('#bm-n').hidden=$('#bm-ok').hidden=$('#bm-no').hidden=!pts;
+    if(pts){
+      $('#bm-n').textContent='Точек: '+pts.length;
+      const q=pts.concat([mouse]);
+      poly(q);ctx.globalAlpha=.45;ctx.fillStyle=(BLD[tt]||BLD.house)[1];ctx.fill();ctx.globalAlpha=1;
+      line(q,2.5,'#0c8a86',[8,6]);
+      ctx.beginPath();ctx.arc(pts[0][0],pts[0][1],5,0,7);ctx.fillStyle='#0c8a86';ctx.fill();
+    }
+  });
 })();
 </script>
 </body>
