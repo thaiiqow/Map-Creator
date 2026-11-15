@@ -540,7 +540,22 @@ City.register({
 
   /* ---------- автобусы ---------- */
   /* Добавляйте модели сюда: 'Название':{img:'файл.png', l:длина в метрах} */
-  const MODELS={'MAZ 206.948':{img:'maz206_948.png',l:12}};
+  /* вид сверху Yutong ZK6890HGQ: белая крыша, люк, блок из 5 баллонов, большой люк; по бокам полосы цвета автобуса. Перед — справа */
+  const yutong=(ctx,L,W,col)=>{
+    const X=f=>f*L,Y=f=>f*W;
+    ctx.lineWidth=1;ctx.strokeStyle='#0008';
+    rr(ctx,-L/2,-W/2,L,W,W*.14);ctx.fillStyle='#f3f5f6';ctx.fill();ctx.stroke();
+    ctx.fillStyle=col;ctx.fillRect(X(-.5)+W*.1,-W/2+1,L-W*.2,W*.09);ctx.fillRect(X(-.5)+W*.1,W/2-1-W*.09,L-W*.2,W*.09);
+    ctx.fillStyle='#bfe3f2';ctx.fillRect(X(.465),Y(-.36),X(.03),Y(.72));                    /* лобовое стекло */
+    rr(ctx,X(-.4),Y(-.14),X(.1),Y(.28),W*.04);ctx.fillStyle='#aeb6bb';ctx.fill();ctx.stroke();   /* малый люк */
+    ctx.fillStyle='#c0392b';[-.07,.07].forEach(y=>{ctx.beginPath();ctx.arc(X(-.385),Y(y),Math.max(W*.02,.4),0,7);ctx.fill()});
+    rr(ctx,X(-.21),Y(-.33),X(.265),Y(.66),W*.08);ctx.fillStyle='#e6eaec';ctx.fill();ctx.stroke(); /* блок баллонов */
+    rr(ctx,X(-.185),Y(-.13),X(.2),Y(.26),W*.02);ctx.fillStyle='#9fb3a8';ctx.fill();
+    ctx.fillStyle='#1f3a33';const cr=Math.min(W*.1,L*.017);
+    for(let i=0;i<5;i++){ctx.beginPath();ctx.arc(X(-.165+i*.038),0,cr,0,7);ctx.fill()}
+    rr(ctx,X(.09),Y(-.34),X(.31),Y(.68),W*.1);ctx.fillStyle='#fafbfb';ctx.fill();ctx.stroke();   /* большой люк */
+  };
+  const MODELS={'MAZ 206.948':{img:'maz206_948.png',l:12},'Yutong ZK6890HGQ':{img:'yutong_zk6890hgq.png',l:9,top:yutong}};
   const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
   const pathOf=R=>{const b=R=>{const a=R.s.map(i=>City.S.stops.find(s=>s.id===i)).filter(Boolean).map(s=>[s.x,s.y]);if(R.loop&&a.length)a.push(a[0]);return a};return City.path?City.path(R,b):b(R)};
   const CI=new WeakMap();
@@ -553,9 +568,11 @@ City.register({
     return{x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t,an:Math.atan2(b[1]-a[1],b[0]-a[0])+(rev?Math.PI:0)};
   }
   const rr=(ctx,x,y,w,h,r)=>{ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,w,h,r)};
-  function drawBus(ctx,b,lm,col){
+  function drawBus(ctx,b,lm,col,top){
     const L=Math.max(lm/mpu(),22),W=L*.34;
-    ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.an);ctx.lineWidth=1;ctx.strokeStyle='#0008';
+    ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.an);
+    if(top){top(ctx,L,W,col);ctx.restore();return}
+    ctx.lineWidth=1;ctx.strokeStyle='#0008';
     rr(ctx,-L/2,-W/2,L,W,W*.2);ctx.fillStyle=col;ctx.fill();ctx.stroke();
     ctx.fillStyle='#bfe3f2';ctx.fillRect(L*.38,-W*.38,L*.08,W*.76);                       /* лобовое стекло */
     ctx.fillStyle='#8d979e';ctx.fillRect(-L*.44,-W*.4,L*.32,W*.8);                         /* метановый отсек */
@@ -618,7 +635,7 @@ City.register({
     /* автобусы */
     bpos=[];
     S.routes.forEach(R=>{const bs=R.buses;if(!bs||!bs.length)return;const pts=pathOf(R),m=info(pts),per=m.L*(R.loop?1:2),v=(30/3.6)*4/mpu();
-      bs.forEach((b,i)=>{const q=at(pts,clock*v+i*per/bs.length,R.loop);if(!q)return;const lm=(MODELS[b.m]||{l:12}).l;drawBus(ctx,q,lm,b.c);bpos.push({x:q.x,y:q.y,L:Math.max(lm/mpu(),22),b,R})});
+      bs.forEach((b,i)=>{const q=at(pts,clock*v+i*per/bs.length,R.loop);if(!q)return;const lm=(MODELS[b.m]||{l:12}).l;drawBus(ctx,q,lm,b.c,(MODELS[b.m]||{}).top);bpos.push({x:q.x,y:q.y,L:Math.max(lm/mpu(),22),b,R})});
     });
     /* экранные слои: координатная сетка и компас */
     ctx.save();ctx.setTransform(d,0,0,d,0,0);
