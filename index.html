@@ -147,7 +147,8 @@ $('#fok').onclick=finish;$('#fno').onclick=()=>{cur=null;updateUI();dirty=true};
 addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;if(e.key==='Enter')finish();if(e.key==='Escape'){cur=sel=null;updateUI();dirty=true}if((e.ctrlKey||e.metaKey)&&e.key==='z')undo()});
 
 const raw=e=>[(e.offsetX-V.x)/V.k,(e.offsetY-V.y)/V.k];
-const snp=p=>snapOn?[Math.round(p[0]/10)*10,Math.round(p[1]/10)*10]:p;
+const snp0=p=>snapOn?[Math.round(p[0]/10)*10,Math.round(p[1]/10)*10]:p;
+const snp=p=>City.snap?City.snap(snp0(p),p):snp0(p);
 const stopById=id=>S.stops.find(s=>s.id===id);
 const stopPts0=R=>{const a=R.s.map(stopById).filter(Boolean).map(s=>[s.x,s.y]);if(R.loop&&a.length)a.push(a[0]);return a};
 const stopPts=R=>City.path?City.path(R,stopPts0):stopPts0(R);
@@ -425,6 +426,49 @@ City.register({
     });
     cache.set(key,out);return out;
   };
+})();
+</script>
+<script>
+/* Плагин: точки на концах дорог, перекрёстки и притягивание дорог друг к другу */
+(function(){
+  let J=null,Sref=null,tgt=null;
+  City.on('change',()=>{J=null});
+  const K=p=>Math.round(p[0])+','+Math.round(p[1]);
+  const proj=(p,a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));const q=[a[0]+dx*t,a[1]+dy*t];return{q,d:Math.hypot(p[0]-q[0],p[1]-q[1])}};
+  function calc(){
+    const S=City.S,segs=[],jm=new Map(),ends=[];
+    S.roads.forEach((R,ri)=>{R.pts.slice(1).forEach((b,i)=>segs.push({a:R.pts[i],b,ri}));if(R.pts.length>1)ends.push(R.pts[0],R.pts[R.pts.length-1])});
+    /* где дороги пересекаются */
+    for(let i=0;i<segs.length;i++)for(let j=i+1;j<segs.length;j++){
+      const s=segs[i],u=segs[j];if(s.ri===u.ri)continue;
+      const r=[s.b[0]-s.a[0],s.b[1]-s.a[1]],q=[u.b[0]-u.a[0],u.b[1]-u.a[1]],den=r[0]*q[1]-r[1]*q[0];
+      if(Math.abs(den)<1e-9)continue;
+      const w=[u.a[0]-s.a[0],u.a[1]-s.a[1]],t=(w[0]*q[1]-w[1]*q[0])/den,v=(w[0]*r[1]-w[1]*r[0])/den,e=1e-6;
+      if(t<-e||t>1+e||v<-e||v>1+e)continue;
+      const p=[s.a[0]+r[0]*t,s.a[1]+r[1]*t];jm.set(K(p),p);
+    }
+    /* где точка одной дороги лежит на другой (примыкание, слияние) */
+    S.roads.forEach((R,ri)=>R.pts.forEach(p=>{if(segs.some(s=>s.ri!==ri&&proj(p,s.a,s.b).d<4))jm.set(K(p),p)}));
+    return{j:[...jm.values()],e:ends.filter(p=>!jm.has(K(p)))};
+  }
+  const get=()=>{if(!J||Sref!==City.S){J=calc();Sref=City.S}return J};
+
+  /* притягивание точек новой дороги к существующим: сначала к точкам и концам, потом к линии */
+  City.snap=(q,r)=>{
+    tgt=null;if(City.tool!=='road')return q;
+    const roads=City.S.roads,k=City.view.k;let best=null;
+    roads.forEach(R=>R.pts.forEach(p=>{const d=Math.hypot(p[0]-r[0],p[1]-r[1]);if(d<16/k&&(!best||d<best.d))best={d,p}}));
+    if(!best)roads.forEach(R=>R.pts.slice(1).forEach((b,i)=>{const x=proj(r,R.pts[i],b);if(x.d<10/k&&(!best||x.d<best.d))best={d:x.d,p:x.q}}));
+    if(best){tgt=best.p;return best.p.slice()}
+    return q;
+  };
+
+  City.layers.over.push((ctx,P)=>{
+    const g=get();
+    g.e.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],5,0,7);ctx.fillStyle=P.wh;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=P.ink;ctx.stroke()});
+    g.j.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],4.5,0,7);ctx.fillStyle='#0c8a86';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=P.wh;ctx.stroke()});
+    if(tgt&&City.tool==='road'){ctx.beginPath();ctx.arc(tgt[0],tgt[1],12,0,7);ctx.lineWidth=2.5;ctx.strokeStyle='#0c8a86';ctx.stroke()}
+  });
 })();
 </script>
 </body>
