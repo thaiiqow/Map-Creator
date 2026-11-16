@@ -2027,5 +2027,285 @@ let at=0;recalc();
   });
 })();
 </script>
+<script>
+/* Плагин: метро и поезда — станции, линии, составы с вагонами.
+   Вставлять ПОСЛЕДНИМ, перед </body>. Рядом с index.html: m81765.png, lastochka.png */
+(function(){
+const E=City.esc,F='Manrope,system-ui,sans-serif',GAP=1.2;
+const mpu=()=>((City.S.scale||50)/50);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const RS=()=>City.S.rstops||(City.S.rstops=[]),RL=()=>City.S.rlines||(City.S.rlines=[]);
+const rrp=(ctx,x,y,w,h,r)=>{ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,w,h,r)};
+
+/* ===== Модели. Добавляйте сюда: img — файл рядом с index.html, cap — человек в вагоне, l/w — длина и ширина вагона в метрах, kmh — скорость ===== */
+const MODELS={
+  metro:{n:'МЕТРО 81-765.2/766.2/767.2',img:'m81765.png',cap:50,l:19.2,w:2.7,kmh:60,def:6,max:12,col:'#c8102e',draw:drawMetro},
+  train:{n:'Ласточка',img:'lastochka.png',cap:60,l:21,w:3.3,kmh:90,def:5,max:12,col:'#2e5aa8',draw:drawSwallow}
+};
+const KINDS={metro:[['station','Станция'],['end','Конечная']],train:[['vokzal','Вокзал'],['station','Станция'],['end','Конечная'],['halt','Остановка']]};
+const NM={station:'Станция',end:'Конечная',vokzal:'Вокзал',halt:'Остановочный пункт'};
+const nc=R=>{const m=MODELS[R.sys];return clamp(Math.round(+R.cars>0?+R.cars:m.def),1,m.max)};
+const ntr=R=>(R.trains===undefined||R.trains==='')?2:clamp(Math.round(+R.trains)||0,0,12);
+const Wb=()=>Math.max(4.2/mpu(),7);
+const Lc=m=>Math.max(m.l/mpu(),16),Wc=m=>Math.max(m.w/mpu(),Wb()*.74);
+
+/* ===== вид сверху ===== */
+function drawMetro(ctx,L,W,head,tail){
+  ctx.lineWidth=.8;ctx.strokeStyle='#0009';
+  rrp(ctx,-L/2,-W/2,L,W,W*.2);ctx.fillStyle='#2a6fc0';ctx.fill();ctx.stroke();
+  ctx.fillStyle='#d9ecf7';ctx.fillRect(-L*.47,-W*.5,L*.94,W*.05);ctx.fillRect(-L*.47,W*.45,L*.94,W*.05);
+  ctx.fillStyle='#12181d';ctx.fillRect(-L*.42,-W*.36,L*.84,W*.72);
+  [-.3,.16].forEach(f=>{
+    rrp(ctx,L*f,-W*.3,L*.15,W*.6,W*.06);ctx.fillStyle='#c4cacf';ctx.fill();ctx.stroke();
+    ctx.fillStyle='#1c2226';[-.14,.14].forEach(y=>{ctx.beginPath();ctx.arc(L*(f+.075),W*y,W*.07,0,7);ctx.fill()});
+  });
+  if(head){ctx.fillStyle='#0b0f12';ctx.fillRect(L*.42,-W*.42,L*.08,W*.84);ctx.fillStyle='#fff3b0';ctx.fillRect(L*.495,-W*.34,L*.012,W*.14);ctx.fillRect(L*.495,W*.2,L*.012,W*.14)}
+  if(tail){ctx.fillStyle='#0b0f12';ctx.fillRect(-L*.5,-W*.42,L*.08,W*.84);ctx.fillStyle='#d33';ctx.fillRect(-L*.506,-W*.34,L*.012,W*.14);ctx.fillRect(-L*.506,W*.2,L*.012,W*.14)}
+}
+function drawSwallow(ctx,L,W,head,tail){
+  ctx.lineWidth=.8;ctx.strokeStyle='#0009';
+  rrp(ctx,-L/2,-W/2,L,W,W*.22);ctx.fillStyle='#b9bfc4';ctx.fill();ctx.stroke();
+  ctx.fillStyle='#e1352b';ctx.fillRect(-L*.5,-W*.5,L,W*.07);ctx.fillRect(-L*.5,W*.43,L,W*.07);
+  rrp(ctx,-L*.46,-W*.38,L*.92,W*.76,W*.1);ctx.fillStyle='#8e979e';ctx.fill();
+  rrp(ctx,-L*.34,-W*.28,L*.2,W*.56,W*.05);ctx.fillStyle='#dde1e4';ctx.fill();
+  rrp(ctx,L*.08,-W*.26,L*.22,W*.52,W*.05);ctx.fillStyle='#5d676e';ctx.fill();
+  if(head){rrp(ctx,L*.32,-W*.5,L*.18,W,W*.3);ctx.fillStyle='#e1352b';ctx.fill();ctx.stroke();ctx.fillStyle='#16222b';ctx.fillRect(L*.44,-W*.3,L*.035,W*.6)}
+  if(tail){rrp(ctx,-L*.5,-W*.5,L*.18,W,W*.3);ctx.fillStyle='#e1352b';ctx.fill();ctx.stroke();ctx.fillStyle='#16222b';ctx.fillRect(-L*.475,-W*.3,L*.035,W*.6)}
+}
+
+/* ===== пути линий ===== */
+const PC=new WeakMap();let ver=0;City.on('change',()=>ver++);
+function build(R){
+  const out=[];
+  (R.s||[]).forEach(e=>{
+    if(Array.isArray(e))out.push({p:e});
+    else{const s=RS().find(x=>x.id===e&&x.sys===R.sys);if(s)out.push({p:[s.x,s.y],st:1})}
+  });
+  while(out.length&&!out[0].st)out.shift();
+  while(out.length&&!out[out.length-1].st)out.pop();
+  if(out.filter(o=>o.st).length<2)return null;
+  if(R.loop)out.push(out[0]);
+  const pts=[],c=[],T=[];let tot=0;
+  out.forEach(o=>{
+    const l=pts[pts.length-1];
+    if(l){const d=Math.hypot(o.p[0]-l[0],o.p[1]-l[1]);if(d<.01){if(o.st)T.push(tot);return}tot+=d}
+    pts.push(o.p);c.push(tot);if(o.st)T.push(tot);
+  });
+  if(pts.length<2)return null;
+  return{pts,c,T,L:tot,sig:pts.length+':'+T.length+':'+Math.round(tot)};
+}
+function pathOf(R){let c=PC.get(R);if(c&&c.v===ver)return c.pa;const pa=build(R);PC.set(R,{v:ver,pa});return pa}
+function at(pa,d,loop){
+  const c=pa.c,L=pa.L;d=loop?((d%L)+L)%L:clamp(d,0,L);
+  let i=1;while(i<c.length-1&&c[i]<d)i++;
+  const a=pa.pts[i-1],b=pa.pts[i],l=(c[i]-c[i-1])||1,t=clamp((d-c[i-1])/l,0,1);
+  return{x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t,an:Math.atan2(b[1]-a[1],b[0]-a[0])};
+}
+const near=(p,pts,r)=>pts.slice(1).some((q,i)=>dseg(p,pts[i],q)<r);
+
+/* ===== движение составов ===== */
+const tm=new WeakMap();let T0=performance.now();
+const half=R=>{const m=MODELS[R.sys];return(nc(R)*(Lc(m)+GAP)-GAP)/2};
+const targets=(pa,R,h)=>R.loop?pa.T:pa.T.map(x=>pa.L>2*h?clamp(x,h,pa.L-h):pa.L/2);
+function sync(){
+  RL().forEach(R=>{
+    const pa=pathOf(R);if(!pa){tm.delete(R);return}
+    const n=ntr(R),sig=pa.sig+'|'+n;let st=tm.get(R);if(st&&st.sig===sig)return;
+    const T=targets(pa,R,half(R)),arr=[];
+    for(let k=0;k<n;k++){
+      const d=pa.L*(k+.5)/n;let dir=1,i;
+      if(R.loop||k%2===0){i=T.findIndex(x=>x>d);if(i<0)i=T.length-1}
+      else{dir=-1;i=0;for(let q=T.length-1;q>=0;q--)if(T[q]<d){i=q;break}}
+      arr.push({d,i,dir,v:0,dw:Math.random()*3});
+    }
+    tm.set(R,{sig,arr});
+  });
+}
+function step(t,R,pa,dt,all){
+  const mo=MODELS[R.sys],h=half(R),len=h*2,vmax=mo.kmh/3.6*4/mpu(),a=vmax/5;
+  if(t.dw>0){t.dw-=dt;t.v=0;return}
+  const T=targets(pa,R,h);if(t.i<0||t.i>=T.length)t.i=0;
+  const rem=(T[t.i]-t.d)*t.dir;
+  if(rem<=.4){
+    if(R.loop&&t.i>=T.length-1){t.d=0;t.i=0}else t.d=T[t.i];
+    t.v=0;t.dw=5+Math.random()*3;
+    if(R.loop)t.i++;
+    else{t.i+=t.dir;if(t.i<0||t.i>=T.length){t.dir=-t.dir;t.i+=2*t.dir}}
+    return;
+  }
+  let vt=Math.min(vmax,Math.sqrt(2*a*rem)+1);
+  all.forEach(o=>{
+    if(o===t||o.dir!==t.dir)return;
+    let g=(o.d-t.d)*t.dir;if(R.loop)g=((g%pa.L)+pa.L)%pa.L;
+    if(g>0&&g<len+120)vt=Math.min(vt,Math.sqrt(2*a*Math.max(0,g-len-10)));
+  });
+  t.v+=clamp(vt-t.v,-a*3*dt,a*dt);t.v=Math.max(0,t.v);
+  t.d+=t.dir*Math.min(t.v*dt,rem);
+}
+(function loop(){
+  const n=performance.now(),dt=Math.min(.1,Math.max(0,(n-T0)/1000));T0=n;
+  sync();let any=false;
+  RL().forEach(R=>{const pa=pathOf(R),st=tm.get(R);if(!pa||!st)return;st.arr.forEach(t=>{step(t,R,pa,dt,st.arr);any=true})});
+  if(any)City.redraw();
+  requestAnimationFrame(loop);
+})();
+
+/* ===== рисование линии ===== */
+let rl=null,tpos=[];
+$('#wrap').insertAdjacentHTML('beforeend','<div id="rlb" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:112px;padding:8px 14px;display:flex;gap:8px;align-items:center"><span id="rln"></span><button id="rlok" class="b p">Готово</button><button id="rlno" class="b">Отмена</button></div>');
+function endLine(){
+  if(!rl)return;const a=rl;rl=null;
+  while(a.s.length&&Array.isArray(a.s[a.s.length-1]))a.s.pop();
+  if(a.s.filter(e=>!Array.isArray(e)).length<2){City.redraw();return}
+  const mo=MODELS[a.sys],n=RL().filter(l=>l.sys===a.sys).length+1;
+  City.add('rlines',{n:(a.sys==='metro'?'Линия метро ':'Маршрут поезда ')+n,c:RC[RL().length%6],sys:a.sys,s:a.s,loop:!!a.loop,cars:mo.def,trains:2});
+}
+$('#rlok').onclick=()=>{endLine();City.redraw()};
+$('#rlno').onclick=()=>{rl=null;City.redraw()};
+addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  if(e.key==='Enter'&&City.tool==='rline')endLine();
+  if(e.key==='Escape'){rl=null;City.redraw()}
+});
+
+/* ===== регистрация ===== */
+City.register({key:'rstops',label:'Станция',tool:'rstop',
+  hint:'Нажмите на карту, чтобы поставить станцию. Тип можно сменить в карточке.',
+  click(p){
+    const a=String(tt).split(':'),sys=a[0],kind=a[1];if(!MODELS[sys]||!NM[kind])return;
+    const n=RS().filter(x=>x.sys===sys).length+1;
+    City.add('rstops',{id:City.S.id++,x:p[0],y:p[1],sys,k:kind,n:NM[kind]+' '+n});
+  },
+  hit:(p,r)=>RS().find(s=>Math.hypot(s.x-p[0],s.y-p[1])<r+12),
+  inspector:o=>{
+    const ks=KINDS[o.sys]||[],ln=RL().filter(l=>l.s.includes(o.id)).map(l=>E(l.n)).join(', ');
+    return `<label>Тип<select data-f="k">${ks.map(([v,t])=>`<option value="${v}" ${o.k===v?'selected':''}>${t}</option>`).join('')}</select></label><div style="font-size:13px;color:var(--mut)">${o.sys==='metro'?'Метро':'Железная дорога'}${ln?'<br>Линии: <b style="color:var(--ink)">'+ln+'</b>':''}</div>`;
+  }});
+City.register({key:'rlines',label:'Линия',tool:'rline',
+  hint:'Нажимайте станции по порядку. Пустое место — точка изгиба. Первая станция ещё раз — замкнуть кольцо. «Готово» — закончить.',
+  click(p,r){
+    const k=City.view.k,sys=String(tt);if(!MODELS[sys])return;
+    if(rl&&rl.sys!==sys)rl=null;
+    let best=null;
+    RS().forEach(s=>{if(s.sys!==sys)return;const d=Math.hypot(s.x-r[0],s.y-r[1]);if(d<20/k&&(!best||d<best.d))best={d,s}});
+    if(best){
+      const id=best.s.id;
+      if(!rl)rl={sys,s:[id],loop:false};
+      else{
+        const ids=rl.s.filter(e=>!Array.isArray(e)),lastStop=!Array.isArray(rl.s[rl.s.length-1]);
+        if(id===ids[0]&&ids.length>2){rl.loop=true;endLine();return}
+        if(!(lastStop&&id===ids[ids.length-1]))rl.s.push(id);
+      }
+    }else if(rl)rl.s.push(p.slice());
+  },
+  hit:(p,r)=>RL().find(R=>{const pa=pathOf(R);return pa&&near(p,pa.pts,Wb()/2+r+1)}),
+  inspector:o=>{
+    const mo=MODELS[o.sys],pa=pathOf(o),m=pa?pa.L*mpu():0,len=m<1000?Math.round(m)+' м':(m/1000).toFixed(2).replace('.',',')+' км';
+    return `<div style="font-size:13px;color:var(--mut)">Модель: <b style="color:var(--ink)">${E(mo.n)}</b><br>Длина: <b style="color:var(--ink)">${len}</b>${o.loop?', кольцо':''}</div>`
+    +`<label>Вагонов в составе<input type="number" min="1" max="${mo.max}" data-f="cars" value="${nc(o)}"></label>`
+    +`<label>Поездов на линии<input type="number" min="0" max="12" data-f="trains" value="${ntr(o)}"></label>`
+    +`<label>Цвет<input type="color" data-f="c" value="${E(o.c)}" style="height:34px;padding:2px"></label>`
+    +`<div style="font-size:13px;color:var(--mut)">Вместимость состава: <b style="color:var(--ink)">${nc(o)*mo.cap} чел.</b> (${mo.cap} в вагоне)</div>`;
+  }});
+$('#insp').addEventListener('change',e=>{const s=City.sel;if(s&&s.k==='rlines'&&e.target.dataset.f)City.updateUI()});
+
+City.addLeaf('Транспорт/Метро',['Станция метро','rstop','metro:station','#c8102e']);
+City.addLeaf('Транспорт/Метро',['Конечная метро','rstop','metro:end','#c8102e']);
+City.addLeaf('Транспорт/Метро',['Линия метро','rline','metro','#c8102e']);
+City.addLeaf('Транспорт/Поезд',['Вокзал','rstop','train:vokzal','#2e5aa8']);
+City.addLeaf('Транспорт/Поезд',['Станция','rstop','train:station','#2e5aa8']);
+City.addLeaf('Транспорт/Поезд',['Конечная','rstop','train:end','#2e5aa8']);
+City.addLeaf('Транспорт/Поезд',['Остановка (о.п.)','rstop','train:halt','#2e5aa8']);
+City.addLeaf('Транспорт/Поезд',['Маршрут поезда','rline','train','#2e5aa8']);
+
+/* ===== отрисовка ===== */
+function badge(ctx,s,P,k){
+  const sc=Math.max(1,.55/k),m=s.sys==='metro',col=MODELS[s.sys].col,sel=City.sel&&City.sel.o===s;
+  let gl='М',fs=11,hh=13;
+  ctx.save();ctx.translate(s.x,s.y);ctx.scale(sc,sc);
+  if(sel){ctx.beginPath();ctx.arc(0,0,26,0,7);ctx.fillStyle='#0c8a8670';ctx.fill()}
+  ctx.lineJoin='round';ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.fillStyle=col;
+  if(m){
+    const R=s.k==='end'?11:9;ctx.beginPath();ctx.arc(0,0,R,0,7);ctx.fill();ctx.stroke();
+    if(s.k==='end'){ctx.beginPath();ctx.arc(0,0,R+4,0,7);ctx.strokeStyle=col;ctx.stroke()}
+    hh=R+4;
+  }else{
+    const D={vokzal:[42,22,'ВОКЗАЛ',9],station:[22,16,'Ст',10],end:[26,18,'К',11],halt:[15,14,'ОП',8]}[s.k]||[22,16,'Ст',10];
+    rrp(ctx,-D[0]/2,-D[1]/2,D[0],D[1],4);ctx.fill();ctx.stroke();
+    if(s.k==='end'){rrp(ctx,-D[0]/2-3,-D[1]/2-3,D[0]+6,D[1]+6,6);ctx.strokeStyle=col;ctx.stroke()}
+    gl=D[2];fs=D[3];hh=D[1]/2+(s.k==='end'?3:0);
+  }
+  ctx.fillStyle='#fff';ctx.font='800 '+fs+'px '+F;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(gl,0,.5);
+  ctx.restore();
+  if(k>.4&&s.n){
+    const y=s.y+(hh+9)*sc;ctx.font='700 11px '+F;ctx.textAlign='center';ctx.textBaseline='middle';ctx.lineJoin='round';
+    ctx.lineWidth=3.5;ctx.strokeStyle=P.bg;ctx.strokeText(s.n,s.x,y);ctx.fillStyle=P.ink;ctx.fillText(s.n,s.x,y);
+  }
+}
+/* метро — под дорогами (подземная линия) */
+City.layers.under.push((ctx,P)=>{
+  RL().forEach(R=>{
+    if(R.sys!=='metro')return;const pa=pathOf(R);if(!pa)return;
+    ctx.lineCap='butt';line(pa.pts,Wb()+3,R.c+'44');line(pa.pts,2.2,R.c,[9,6]);ctx.lineCap='round';
+  });
+});
+/* пути, станции, составы — поверх */
+City.layers.over.push((ctx,P)=>{
+  const k=City.view.k,dark=dk.matches,s0=City.sel;
+  if(rl&&(City.tool!=='rline'||String(tt)!==rl.sys))rl=null;
+  $('#rlb').hidden=!rl;
+  if(rl)$('#rln').textContent='Станций: '+rl.s.filter(e=>!Array.isArray(e)).length;
+  /* железнодорожные пути */
+  RL().forEach(R=>{
+    if(R.sys!=='train')return;const pa=pathOf(R);if(!pa)return;const w=Wb(),g=w*.28;
+    if(s0&&s0.o===R)line(pa.pts,w+12,'#0c8a8670');
+    ctx.lineCap='butt';
+    line(pa.pts,w+2.5,'#0000002e');line(pa.pts,w,dark?'#4d4a45':'#a39a8d');line(pa.pts,w,dark?'#2c261f':'#5b4a3a',[1.6,3.8]);
+    line(offs(pa.pts,g),1.3,'#d9dde0');line(offs(pa.pts,-g),1.3,'#d9dde0');line(pa.pts,1.6,R.c,[8,8]);
+    ctx.lineCap='round';
+  });
+  RL().forEach(R=>{if(R.sys==='metro'&&s0&&s0.o===R){const pa=pathOf(R);if(pa)line(pa.pts,Wb()+12,'#0c8a8670')}});
+  if(City.tool==='rline')RS().forEach(s=>{
+    if(s.sys!==String(tt))return;
+    ctx.beginPath();ctx.arc(s.x,s.y,22*Math.max(1,.55/k),0,7);ctx.lineWidth=2/k;ctx.strokeStyle='#0c8a86';ctx.setLineDash([5/k,4/k]);ctx.stroke();ctx.setLineDash([]);
+  });
+  RS().forEach(s=>badge(ctx,s,P,k));
+  /* составы */
+  tpos=[];
+  RL().forEach(R=>{
+    const pa=pathOf(R),st=tm.get(R);if(!pa||!st)return;
+    const mo=MODELS[R.sys],cars=nc(R),L=Lc(mo),W=Wc(mo),pitch=L+GAP;
+    st.arr.forEach(t=>{
+      const cs=[];
+      for(let j=0;j<cars;j++){
+        const q=at(pa,t.d+t.dir*((cars-1)/2-j)*pitch,R.loop);
+        ctx.save();ctx.translate(q.x,q.y);ctx.rotate(q.an+(t.dir<0?Math.PI:0));
+        mo.draw(ctx,L,W,j===0,j===cars-1);ctx.restore();
+        cs.push([q.x,q.y]);
+      }
+      tpos.push({R,cs,r:L/2+2,m:mo});
+    });
+  });
+  /* набросок новой линии */
+  if(rl){
+    const q=rl.s.map(e=>{if(Array.isArray(e))return e;const s=RS().find(x=>x.id===e);return s?[s.x,s.y]:null}).filter(Boolean);
+    if(q.length)line(q.concat([mouse]),3,'#0c8a86',[8,6]);
+  }
+});
+
+/* ===== окно с фото состава ===== */
+let dn=null;
+cv.addEventListener('pointerdown',e=>{dn=[e.clientX,e.clientY]});
+cv.addEventListener('pointerup',e=>{
+  if(!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
+  const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k;
+  const h=[...tpos].reverse().find(q=>q.cs.some(c=>Math.hypot(c[0]-x,c[1]-y)<q.r));
+  if(!h)return;
+  sel=null;City.updateUI();
+  $('#pop').innerHTML=`<b>${E(h.m.n)}</b><div style="color:var(--mut)">${E(h.R.n)} · вагонов: ${h.cs.length}</div><div style="color:var(--mut)">Вместимость: ${h.cs.length*h.m.cap} чел.</div><img src="${E(h.m.img)}" alt="${E(h.m.n)}" onerror="this.outerHTML='<small>Нет файла ${E(h.m.img)} рядом с index.html</small>'"><div class="row"><button id="pc4" class="b">Закрыть</button></div>`;
+  $('#pop').hidden=false;$('#pc4').onclick=()=>$('#pop').hidden=true;
+});
+})();
+</script>
 </body>
 </html>
