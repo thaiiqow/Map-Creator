@@ -2307,5 +2307,390 @@ cv.addEventListener('pointerup',e=>{
 });
 })();
 </script>
+<script>
+/* Плагин: аэропорты (территория, ВПП, РД, стоянки, здания, забор) и самолёты на маршрутах.
+   ОБНОВЛЕНИЕ: маршрут самолётов можно строить через промежуточные точки (клик по пустому месту). */
+(function(){
+  const D=()=>City.S,mpu=()=>((D().scale||50)/50),E=City.esc;
+  const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+  const K=p=>(Math.round(p[0]*10)/10)+','+(Math.round(p[1]*10)/10);
+
+  /* ===== Модели самолётов. Добавляйте авиакомпании/модели сюда: img — файл рядом с index.html, l/sp — длина и размах крыла в метрах ===== */
+  const PLANES={
+  'Boeing 737':{l:39.5,sp:35.8,seats:189,al:{
+    'S7 Airlines':{img:'b737s7.png',fus:'#b6e51c',tail:'#b6e51c',eng:'#3fae3a',wing:'#dfe5e8'},
+    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
+  'Airbus A321':{l:44.5,sp:35.8,seats:236,al:{
+    'VietJet':{img:'vja321.png',fus:'#f6f7f7',rear:'#d9232d',tail:'#d9232d',eng:'#d9232d',wing:'#e3e7ea',tip:true},
+    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
+  'Boeing 777':{l:73.9,sp:64.8,seats:400,al:{
+    'Aeroflot':{img:'b777a.png',fus:'#eceff1',tail:'#1b2a6b',eng:'#1b2a6b',wing:'#dfe5e8'},
+    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
+  'Airbus A319':{l:33.8,sp:34.1,seats:156,al:{
+    'Aurora':{img:'aura319.png',fus:'#f6f7f7',rear:'#1c3c8f',tail:'#1c3c8f',eng:'#1f3f94',wing:'#e3e7ea',tip:true,tipc:'#f58220'},
+    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}}
+};
+  const MK=Object.keys(PLANES);
+  const specOf=pl=>{const m=PLANES[pl.m]||PLANES[MK[0]];return m.al[pl.al]||m.al[Object.keys(m.al)[0]]};
+
+  /* здания аэропорта — обычные здания с новыми типами */
+  BLD.terminal=['Терминал','#cdd6df',120];BLD.hangar=['Ангар','#b9c0c7',90];BLD.tower=['Диспетчерская вышка','#e3d9c6',24];
+
+  const cen=a=>[a.pts.reduce((s,p)=>s+p[0],0)/a.pts.length,a.pts.reduce((s,p)=>s+p[1],0)/a.pts.length];
+  const aptOf=id=>D().airports.find(a=>a.id===id);
+  const rwysOf=a=>D().rwys.filter(r=>inPoly(r.pts[0],a.pts)||inPoly(r.pts[r.pts.length-1],a.pts));
+  const standsOf=a=>D().stands.filter(s=>inPoly([s.x,s.y],a.pts));
+  const plen=a=>a.slice(1).reduce((s,p,i)=>s+dst(p,a[i]),0);
+  const near=(p,pts,r)=>pts.slice(1).some((q,i)=>dseg(p,pts[i],q)<r);
+  let dr=null,ar=null,M=[0,0],G=null,fl=[],Sref=null,need=true,T0=performance.now(),dn=null,fpos=[];
+  City.on('change',()=>{G=null;need=true});
+  cv.addEventListener('pointermove',e=>{const V=City.view;M=[(e.offsetX-V.x)/V.k,(e.offsetY-V.y)/V.k]});
+
+  /* ---------- панель «Готово» для рисования ---------- */
+  $('#wrap').insertAdjacentHTML('beforeend','<div id="apb" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:112px;padding:8px 14px;display:flex;gap:8px;align-items:center"><span id="apn"></span><button id="apok" class="b p">Готово</button><button id="apno" class="b">Отмена</button></div>');
+  const ui=()=>{
+    if(dr&&dr.t!==City.tool)dr=null;if(ar&&City.tool!=='aroute')ar=null;
+    const act=!!(dr||ar);$('#apb').hidden=!act;
+    if(act)$('#apn').textContent=dr?'Точек: '+dr.pts.length:'Аэропортов: '+ar.s.length+', точек пути: '+(ar.legs.reduce((s,l)=>s+l.length,0)+ar.cur.length);
+  };
+  $('#apok').onclick=()=>{endDraw();endRoute();City.redraw()};
+  $('#apno').onclick=()=>{dr=ar=null;City.redraw()};
+  addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;if(e.key==='Enter'){endDraw();endRoute()}if(e.key==='Escape')dr=ar=null;City.redraw()});
+
+  /* ---------- рисование линий и территорий ---------- */
+  function stroke(kind,p){
+    const k=City.view.k;
+    if(!dr||dr.t!==kind){dr={t:kind,pts:[p]};return}
+    const l=dr.pts[dr.pts.length-1],f=dr.pts[0];
+    if(dst(l,p)<6/k||(kind==='apt'&&dr.pts.length>2&&dst(f,p)<14/k)){endDraw();return}
+    dr.pts.push(p);
+  }
+  function endDraw(){
+    if(!dr)return;const d=dr,S=D();dr=null;
+    if(d.t==='apt'&&d.pts.length>2)City.add('airports',{id:S.id++,pts:d.pts,n:'Аэропорт '+(S.airports.length+1)});
+    else if(d.t==='rwy'&&d.pts.length>1)City.add('rwys',{pts:d.pts,n:'ВПП '+(S.rwys.length+1),w:30});
+    else if(d.t==='taxi'&&d.pts.length>1)City.add('taxis',{pts:d.pts,n:'РД '+(S.taxis.length+1),w:14});
+    else if(d.t==='fence'&&d.pts.length>1)City.add('fences',{pts:d.pts,n:'Забор'});
+  }
+  /* маршрут: s — id аэропортов, legs[i] — промежуточные точки между s[i] и следующим аэропортом (для кольца — и от последнего к первому) */
+  function endRoute(){
+    if(!ar)return;const a=ar,S=D();ar=null;
+    if(a.s.length>1)City.add('aroutes',{n:'Рейс '+(S.aroutes.length+1),c:RC[S.aroutes.length%6],s:a.s,loop:!!a.loop,legs:a.legs,planes:[{m:MK[0],al:Object.keys(PLANES[MK[0]].al)[0]}]});
+  }
+
+  /* ---------- регистрация инструментов ---------- */
+  const G0='Транспорт/Аэропорт';
+  const lenI=o=>`<div style="font-size:13px;color:var(--mut)">Длина: <b style="color:var(--ink)">${Math.round(plen(o.pts)*mpu()).toLocaleString('ru-RU')} м</b></div>`;
+  const widI=d=>o=>`<label>Ширина<input type="number" min="4" data-f="w" value="${E(o.w||d)}"></label>`+lenI(o);
+  City.register({key:'airports',label:'Аэропорт',group:G0,leaf:'Территория аэропорта',color:'#8ea1ad',tool:'apt',
+    hint:'Обведите территорию аэропорта точками. Клик по первой точке, двойной клик или «Готово» — закончить. Выбрать территорию — нажать на её границу.',click:p=>stroke('apt',p)});
+  City.register({key:'rwys',label:'Взлётная полоса',group:G0,leaf:'Взлётная полоса',color:'#4a5258',tool:'rwy',
+    hint:'Ставьте точки полосы. Двойной клик или «Готово» — закончить.',click:p=>stroke('rwy',p),
+    hit:(p,r)=>D().rwys.find(R=>near(p,R.pts,(+R.w||30)/2+r)),inspector:widI(30)});
+  City.register({key:'taxis',label:'Рулёжная дорожка',group:G0,leaf:'Рулёжная дорожка',color:'#7a838a',tool:'taxi',
+    hint:'Ставьте точки рулёжной дорожки. Двойной клик или «Готово» — закончить.',click:p=>stroke('taxi',p),
+    hit:(p,r)=>D().taxis.find(R=>near(p,R.pts,(+R.w||14)/2+r)),inspector:widI(14)});
+  City.register({key:'stands',label:'Стоянка самолёта',group:G0,leaf:'Стоянка самолётов',color:'#e0b400',tool:'stand',
+    hint:'Нажмите на карту, чтобы поставить стоянку. Угол носа задаётся в карточке.',
+    click:p=>City.add('stands',{x:p[0],y:p[1],a:0,n:'Стоянка '+(D().stands.length+1)}),
+    hit:(p,r)=>D().stands.find(s=>dst([s.x,s.y],p)<r+18),
+    inspector:o=>`<label>Угол носа, °<input type="number" data-f="a" value="${E(o.a||0)}"></label>`});
+  City.addLeaf(G0,['Терминал','bld','terminal','#cdd6df']);
+  City.addLeaf(G0,['Ангар','bld','hangar','#b9c0c7']);
+  City.addLeaf(G0,['Диспетчерская вышка','bld','tower','#e3d9c6']);
+  City.register({key:'fences',label:'Забор',group:G0,leaf:'Забор',color:'#59636b',tool:'fence',
+    hint:'Ставьте точки забора. Двойной клик или «Готово» — закончить.',click:p=>stroke('fence',p),
+    hit:(p,r)=>D().fences.find(F=>near(p,F.pts,r+3)),inspector:lenI});
+  /* ломаная маршрута: центры аэропортов + промежуточные точки */
+  const rpts=R=>{
+    const q=[],n=R.s.length,L=R.legs||[];
+    for(let i=0;i<n;i++){
+      const a=aptOf(R.s[i]);if(a)q.push(cen(a));
+      if(i<n-1||R.loop)(L[i]||[]).forEach(p=>q.push(p));
+    }
+    if(R.loop&&q.length)q.push(q[0]);
+    return q;
+  };
+  City.aroutePts=rpts;
+  const wpN=o=>(o.legs||[]).reduce((s,l)=>s+l.length,0);
+  City.register({key:'aroutes',label:'Маршрут самолётов',group:G0,leaf:'Маршрут самолётов',color:'#2e86ab',tool:'aroute',
+    hint:'Нажимайте на территории аэропортов по порядку. Клик по пустому месту — точка пути: самолёт пролетит через неё. Первый аэропорт ещё раз — замкнуть кольцо. «Готово» — закончить.',
+    click(p,r){
+      const a=D().airports.find(a=>inPoly(r,a.pts));
+      if(!a){if(ar)ar.cur.push(p.slice());return}
+      if(!ar){ar={s:[a.id],loop:false,legs:[],cur:[]};return}
+      if(a.id===ar.s[0]&&ar.s.length>2){ar.legs.push(ar.cur);ar.cur=[];ar.loop=true;endRoute()}
+      else if(a.id!==ar.s[ar.s.length-1]){ar.legs.push(ar.cur);ar.cur=[];ar.s.push(a.id)}
+    },
+    hit:(p,r)=>D().aroutes.find(R=>near(p,rpts(R),r+2)),
+    inspector:o=>{
+      const ps=o.planes||[];
+      return `<div style="font-size:13px;color:var(--mut)">Аэропортов: <b style="color:var(--ink)">${o.s.length}</b>${o.loop?', кольцо':''}${wpN(o)?', точек пути: <b style="color:var(--ink)">'+wpN(o)+'</b>':''}</div><label>Самолёты на маршруте</label>`
+      +ps.map((p,i)=>`<div style="display:flex;flex-direction:column;gap:4px"><div class="row" style="justify-content:flex-start;flex-wrap:nowrap"><select data-pi="${i}" data-pf="m" style="margin:0;flex:1">${MK.map(k=>`<option ${k===p.m?'selected':''}>${k}</option>`).join('')}</select><button class="b danger" data-pdel="${i}" aria-label="Убрать">✕</button></div><select data-pi="${i}" data-pf="al" style="margin:0">${Object.keys((PLANES[p.m]||PLANES[MK[0]]).al).map(k=>`<option ${k===p.al?'selected':''}>${k}</option>`).join('')}</select></div>`).join('')
+      +'<button class="b" data-padd="1">+ Добавить самолёт</button>';
+    }});
+  /* территорию выбираем по границе и проверяем последней, чтобы она не перекрывала остальное */
+  City.hits.push({key:'airports',fn:(p,r)=>D().airports.find(a=>near(p,a.pts.concat([a.pts[0]]),r+3)||false)});
+
+  $('#insp').addEventListener('click',e=>{
+    const b=e.target.closest('button'),s=City.sel;if(!b||!s||s.k!=='aroutes')return;const o=s.o;
+    if(b.dataset.padd){City.push();o.planes=o.planes||[];o.planes.push({m:MK[0],al:Object.keys(PLANES[MK[0]].al)[0]});City.changed();City.updateUI()}
+    if(b.dataset.pdel&&o.planes){City.push();o.planes.splice(+b.dataset.pdel,1);City.changed();City.updateUI()}
+  });
+  $('#insp').addEventListener('change',e=>{
+    const t=e.target,s=City.sel;if(t.dataset.pi==null||!s||s.k!=='aroutes'||!s.o.planes)return;
+    const p=s.o.planes[+t.dataset.pi];if(!p)return;p[t.dataset.pf]=t.value;
+    if(t.dataset.pf==='m'){p.al=Object.keys(PLANES[p.m].al)[0];City.updateUI()}
+    City.changed();
+  });
+
+  /* ---------- граф рулёжных дорожек ---------- */
+  function proj(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));const q=[a[0]+dx*t,a[1]+dy*t];return{t,q,d:dst(p,q)}}
+  function buildG(){
+    const S=D(),P=S.rwys.concat(S.taxis),sg=[],lk=[];
+    P.forEach((R,ri)=>{for(let i=1;i<R.pts.length;i++)sg.push({a:R.pts[i-1],b:R.pts[i],ri,sp:[{t:0,p:R.pts[i-1]},{t:1,p:R.pts[i]}]})});
+    for(let i=0;i<sg.length;i++)for(let j=i+1;j<sg.length;j++){
+      const s=sg[i],u=sg[j];if(s.ri===u.ri)continue;
+      const r=[s.b[0]-s.a[0],s.b[1]-s.a[1]],q=[u.b[0]-u.a[0],u.b[1]-u.a[1]],den=r[0]*q[1]-r[1]*q[0];
+      if(Math.abs(den)<1e-9)continue;
+      const w=[u.a[0]-s.a[0],u.a[1]-s.a[1]],t=(w[0]*q[1]-w[1]*q[0])/den,v=(w[0]*r[1]-w[1]*r[0])/den,e=1e-6;
+      if(t<-e||t>1+e||v<-e||v>1+e)continue;
+      const p=[s.a[0]+r[0]*t,s.a[1]+r[1]*t];s.sp.push({t,p});u.sp.push({t:v,p});
+    }
+    const attach=(e,maxD)=>{let best=null;sg.forEach(s=>{const r=proj(e,s.a,s.b);if(!best||r.d<best.r.d)best={s,r}});
+      if(best&&best.r.d<maxD&&best.r.d>.05){best.s.sp.push({t:best.r.t,p:best.r.q});lk.push([e,best.r.q])}};
+    P.forEach(R=>{[R.pts[0],R.pts[R.pts.length-1]].forEach(e=>{
+      let best=null;sg.forEach(s=>{if(P[s.ri]===R)return;const r=proj(e,s.a,s.b);if(r.d<12&&(!best||r.d<best.r.d))best={s,r}});
+      if(best&&best.r.d>.05){best.s.sp.push({t:best.r.t,p:best.r.q});lk.push([e,best.r.q])}})});
+    S.stands.forEach(st=>attach([st.x,st.y],500));
+    const idx=new Map(),pts=[],adj=[];
+    const node=p=>{const k=K(p);if(!idx.has(k)){idx.set(k,pts.length);pts.push(p);adj.push([])}return idx.get(k)};
+    const edge=(p,q)=>{const a=node(p),b=node(q);if(a===b)return;const w=dst(p,q);adj[a].push([b,w]);adj[b].push([a,w])};
+    sg.forEach(s=>{s.sp.sort((x,y)=>x.t-y.t);for(let i=1;i<s.sp.length;i++)edge(s.sp[i-1].p,s.sp[i].p)});
+    lk.forEach(l=>edge(l[0],l[1]));
+    return{idx,pts,adj};
+  }
+  function gpath(a,b){
+    if(!G)G=buildG();
+    const s=G.idx.get(K(a)),t=G.idx.get(K(b));if(s==null||t==null)return null;
+    const n=G.pts.length,d=new Array(n).fill(Infinity),pr=new Array(n).fill(-1),done=new Array(n).fill(false);d[s]=0;
+    for(;;){
+      let u=-1;for(let i=0;i<n;i++)if(!done[i]&&d[i]<Infinity&&(u<0||d[i]<d[u]))u=i;
+      if(u<0||u===t)break;done[u]=true;
+      G.adj[u].forEach(([v,w])=>{if(d[u]+w<d[v]){d[v]=d[u]+w;pr[v]=u}});
+    }
+    if(d[t]===Infinity)return null;
+    const out=[];for(let u=t;u>=0;u=pr[u])out.push(G.pts[u]);return out.reverse();
+  }
+
+  /* ---------- самолёты: стоянка -> рулёжка -> разбег -> полёт (через точки пути) -> посадка -> рулёжка -> стоянка ---------- */
+  const peek=f=>{const n=f.R.s.length;if(f.R.loop)return{i:(f.i+1)%n,dir:1};let d=f.dir;if(f.i+d>=n||f.i+d<0)d=-d;return{i:f.i+d,dir:d}};
+  function pickStand(a,me){
+    const ss=standsOf(a),free=ss.filter(s=>!fl.some(o=>o!==me&&o.st===s)),arr=free.length?free:ss;
+    return arr.length?arr[Math.floor(Math.random()*arr.length)]:null;
+  }
+  function mk(f,pts){
+    const q=[];pts.forEach(p=>{const l=q[q.length-1];if(!l||dst(l,p)>.05)q.push(p)});
+    if(q.length<2)q.push([q[0][0]+.1,q[0][1]]);
+    const c=[0];for(let i=1;i<q.length;i++)c.push(c[i-1]+dst(q[i],q[i-1]));
+    f.path=q;f.cum=c;f.PL=c[c.length-1];f.d=0;
+  }
+  function at(f){
+    const c=f.cum,d=Math.max(0,Math.min(f.PL,f.d));let i=1;while(i<c.length-1&&c[i]<d)i++;
+    const a=f.path[i-1],b=f.path[i],l=(c[i]-c[i-1])||1,t=(d-c[i-1])/l;
+    return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,Math.atan2(b[1]-a[1],b[0]-a[0])];
+  }
+  /* положение на пути полёта (через точки) */
+  function flyAt(f){
+    const c=f.fcum,d=Math.max(0,Math.min(f.FL,f.d));let i=1;while(i<c.length-1&&c[i]<d)i++;
+    const a=f.fpts[i-1],b=f.fpts[i],l=(c[i]-c[i-1])||1,t=(d-c[i-1])/l;
+    return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,Math.atan2(b[1]-a[1],b[0]-a[0])];
+  }
+  const orient=(pts,dir)=>{const a=pts[0],b=pts[pts.length-1];return(b[0]-a[0])*dir[0]+(b[1]-a[1])*dir[1]<0?pts.slice().reverse():pts};
+  function arrive(f){
+    f.i=f.nx.i;f.dir=f.nx.dir;f.ph='park';f.t=5+Math.random()*4;f.alt=0;f.v=0;f.path=null;
+    if(f.st){f.x=f.st.x;f.y=f.st.y;f.ta=(+f.st.a||0)*Math.PI/180}
+  }
+  function depart(f){
+    const R=f.R,cur=aptOf(R.s[f.i]),nx=peek(f),dest=aptOf(R.s[nx.i]);
+    if(!cur||!dest||dest===cur){f.t=3;return}
+    f.nx=nx;f.dest=dest;
+    /* промежуточные точки этого перегона (в обратную сторону — в обратном порядке) */
+    const LG=R.legs||[];
+    f.wp=(R.loop||nx.dir>0)?(LG[f.i]||[]).slice():(LG[f.i-1]||[]).slice().reverse();
+    const rws=rwysOf(cur),cc=cen(cur),dc=f.wp.length?f.wp[0]:cen(dest);
+    if(!rws.length){f.st=null;startFly(f);return}
+    f.roll=orient(rws[0].pts,[dc[0]-cc[0],dc[1]-cc[1]]);
+    if(f.st){
+      const sp=[f.st.x,f.st.y],tp=gpath(sp,f.roll[0]);
+      mk(f,[sp].concat(tp||[]).concat([f.roll[0]]));f.ph='taxiout';
+    }else{mk(f,f.roll);f.ph='roll';f.v=0}
+  }
+  function startFly(f){
+    const dest=f.dest,p0=[f.x,f.y],dc=cen(dest),rws=rwysOf(dest),wp=f.wp||[],last=wp.length?wp[wp.length-1]:p0;
+    f.st=null;
+    if(rws.length){f.land=orient(rws[0].pts,[dc[0]-last[0],dc[1]-last[1]]);f.T=f.land[0]}else{f.land=null;f.T=dc}
+    const q=[p0].concat(wp,[f.T]),c=[0];
+    for(let i=1;i<q.length;i++)c.push(c[i-1]+dst(q[i],q[i-1]));
+    f.fpts=q;f.fcum=c;f.FL=Math.max(1,c[c.length-1]);f.d=0;f.ph='fly';f.v=Math.max(f.v,80);
+  }
+  function step(f,dt){
+    switch(f.ph){
+      case 'park':f.t-=dt;if(f.t<=0)depart(f);break;
+      case 'taxiout':f.d+=14*dt;if(f.d>=f.PL){mk(f,f.roll);f.ph='roll';f.v=0}break;
+      case 'roll':{
+        f.v+=22*dt;f.d+=f.v*dt;f.alt=Math.max(0,Math.min(.4,(f.v-60)/40));
+        if(f.v>=80||f.d>=f.PL){f.d=Math.min(f.d,f.PL);const a=at(f);f.x=a[0];f.y=a[1];startFly(f)}
+        break}
+      case 'fly':{
+        const rem=f.FL-f.d;f.v+=((rem<250?70:115)-f.v)*Math.min(1,dt);f.d+=f.v*dt;
+        f.alt=Math.max(0,Math.min(1,.4+f.d/150,rem/150));
+        if(f.d>=f.FL){
+          if(f.land){mk(f,f.land);f.ph='land';f.v=Math.max(f.v*.6,55);f.alt=0}
+          else{f.st=pickStand(f.dest,f);arrive(f)}
+        }
+        break}
+      case 'land':{
+        f.v=Math.max(12,f.v-16*dt);f.d+=f.v*dt;f.alt=0;
+        if(f.d>=f.PL){
+          const end=f.path[f.path.length-1],st=pickStand(f.dest,f);f.st=st;
+          if(st){const tp=gpath(end,[st.x,st.y]);mk(f,[end].concat(tp||[]).concat([[st.x,st.y]]));f.ph='taxiin'}
+          else arrive(f);
+        }
+        break}
+      case 'taxiin':f.d+=14*dt;if(f.d>=f.PL)arrive(f);break;
+    }
+    if(f.ph==='fly'){const a=flyAt(f);f.x=a[0];f.y=a[1];f.ta=a[2]}
+    else if(f.ph!=='park'&&f.path){const a=at(f);f.x=a[0];f.y=a[1];f.ta=a[2]}
+    if(f.an===undefined)f.an=f.ta;
+    let da=f.ta-f.an;da=Math.atan2(Math.sin(da),Math.cos(da));f.an+=da*Math.min(1,dt*(f.ph==='park'?2:5));
+  }
+  function syncF(){
+    const S=D();
+    fl=fl.filter(f=>S.aroutes.includes(f.R)&&(f.R.planes||[]).includes(f.pl)&&f.R.s.every(aptOf));
+    S.aroutes.forEach(R=>{
+      if(R.s.length<2||!R.s.every(aptOf))return;
+      (R.planes||[]).forEach((pl,k)=>{
+        if(fl.some(f=>f.pl===pl))return;
+        const a=aptOf(R.s[k%R.s.length]),f={pl,R,i:k%R.s.length,dir:1,ph:'park',t:Math.random()*8+k*3,alt:0,v:0};
+        f.st=pickStand(a,f);const c=f.st?[f.st.x,f.st.y]:cen(a);
+        f.x=c[0];f.y=c[1];f.ta=f.an=f.st?(+f.st.a||0)*Math.PI/180:0;fl.push(f);
+      });
+    });
+  }
+  function ensure(){
+    if(Sref!==City.S){Sref=City.S;fl=[];need=true;G=null}
+    if(need){syncF();need=false}
+  }
+
+  /* ---------- рисование ---------- */
+  const ln=(ctx,pts,w,c,dash)=>{ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.lineWidth=w;ctx.strokeStyle=c;ctx.setLineDash(dash||[]);ctx.stroke();ctx.setLineDash([])};
+  const rrect=(ctx,x,y,w,h,r)=>{ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,w,h,r)};
+  function drawPlane(ctx,L,sp,a,sh){
+    const W=L*.095,HS=sp/2,c=x=>sh?'#0000003d':x;
+    ctx.lineJoin='round';ctx.lineWidth=.6;ctx.strokeStyle='#0007';
+    const poly=(pts,fill)=>{ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.fillStyle=c(fill);ctx.fill();if(!sh)ctx.stroke()};
+    [1,-1].forEach(s=>{
+      poly([[.1*L,s*W*.4],[-.09*L,s*HS],[-.16*L,s*HS],[-.1*L,s*W*.4]],a.wing);
+      poly([[-.4*L,s*W*.3],[-.46*L,s*L*.16],[-.49*L,s*L*.16],[-.47*L,s*W*.3]],a.wing);
+      if(a.tip)poly([[-.1*L,s*HS],[-.14*L,s*(HS+W*.45)],[-.17*L,s*(HS+W*.45)],[-.16*L,s*HS]],a.tipc||a.tail);
+      rrect(ctx,.03*L,s*HS*.33-W*.25,.09*L,W*.5,W*.2);ctx.fillStyle=c(a.eng);ctx.fill();if(!sh)ctx.stroke();
+    });
+    const fus=()=>{ctx.beginPath();ctx.moveTo(.5*L,0);ctx.bezierCurveTo(.5*L,W*.35,.44*L,W/2,.36*L,W/2);ctx.lineTo(-.3*L,W/2);ctx.lineTo(-.5*L,W*.12);ctx.lineTo(-.5*L,-W*.12);ctx.lineTo(-.3*L,-W/2);ctx.lineTo(.36*L,-W/2);ctx.bezierCurveTo(.44*L,-W/2,.5*L,-W*.35,.5*L,0);ctx.closePath()};
+    fus();ctx.fillStyle=c(a.fus);ctx.fill();
+    if(a.rear&&!sh){ctx.save();fus();ctx.clip();ctx.fillStyle=a.rear;ctx.fillRect(-L,-W,L*.9,2*W);ctx.restore()}
+    fus();if(!sh)ctx.stroke();
+    if(!sh){ctx.fillStyle=a.tail;ctx.fillRect(-.5*L,-W*.07,.18*L,W*.14);ctx.fillStyle='#16222b';ctx.fillRect(.4*L,-W*.3,.03*L,W*.6)}
+  }
+
+  /* под дорогами: территория, рулёжки, полосы, стоянки */
+  City.layers.under.push((ctx,P)=>{
+    const S=D();
+    S.airports.forEach(a=>{
+      ctx.beginPath();a.pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
+      ctx.fillStyle='#8ea1ad30';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle='#5b6b77';ctx.setLineDash([12,8]);ctx.stroke();ctx.setLineDash([]);
+    });
+    S.airports.forEach(a=>{
+      if(!a.n)return;const c=cen(a);
+      ctx.font='800 24px Manrope,system-ui,sans-serif';if('letterSpacing' in ctx)ctx.letterSpacing='3px';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillStyle='#5b6b77cc';ctx.fillText(a.n,c[0],c[1]);if('letterSpacing' in ctx)ctx.letterSpacing='0px';
+    });
+    S.taxis.forEach(R=>{const w=+R.w||14;ln(ctx,R.pts,w+3,'#2f373c');ln(ctx,R.pts,w,'#6b747a');ln(ctx,R.pts,1.4,'#e0b400',[10,8])});
+    S.rwys.forEach(R=>{
+      const w=+R.w||30;ln(ctx,R.pts,w+4,'#2b3338');ln(ctx,R.pts,w,'#4a5258');ln(ctx,R.pts,2,'#fff',[18,14]);
+      [[R.pts[0],R.pts[1]],[R.pts[R.pts.length-1],R.pts[R.pts.length-2]]].forEach(([e,n])=>{
+        const l=dst(e,n)||1,ux=(n[0]-e[0])/l,uy=(n[1]-e[1])/l,bx=e[0]+ux*8,by=e[1]+uy*8;
+        ctx.beginPath();ctx.moveTo(bx-uy*w*.36,by+ux*w*.36);ctx.lineTo(bx+uy*w*.36,by-ux*w*.36);ctx.lineWidth=3;ctx.strokeStyle='#fff';ctx.stroke();
+      });
+    });
+    S.stands.forEach(s=>{
+      ctx.save();ctx.translate(s.x,s.y);ctx.rotate((+s.a||0)*Math.PI/180);
+      rrect(ctx,-28,-23,56,46,6);ctx.lineWidth=1.5;ctx.strokeStyle='#e0b400';ctx.setLineDash([6,4]);ctx.stroke();ctx.setLineDash([]);
+      ctx.beginPath();ctx.moveTo(-22,0);ctx.lineTo(22,0);ctx.lineTo(15,-5);ctx.moveTo(22,0);ctx.lineTo(15,5);ctx.stroke();
+      ctx.restore();
+      if(City.view.k>.5&&s.n){ctx.font='700 10px Manrope,system-ui,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=P.lab;ctx.fillText(s.n,s.x,s.y+30)}
+    });
+  });
+
+  /* набросок нового маршрута: аэропорты + точки пути + курсор */
+  const draftPts=()=>{
+    const q=[];
+    ar.s.forEach((id,i)=>{const a=aptOf(id);if(a)q.push(cen(a));(ar.legs[i]||[]).forEach(p=>q.push(p))});
+    ar.cur.forEach(p=>q.push(p));
+    return q;
+  };
+
+  /* поверх: забор, маршруты, выделение, самолёты */
+  City.layers.over.push((ctx,P)=>{
+    ensure();ui();
+    const S=D(),k=City.view.k;
+    ctx.beginPath();
+    S.fences.forEach(F=>{
+      F.pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));
+      F.pts.slice(1).forEach((b,i)=>{const a=F.pts[i],l=dst(a,b),n=Math.floor(l/12);if(!l)return;const ux=(b[0]-a[0])/l,uy=(b[1]-a[1])/l;
+        for(let j=0;j<=n;j++){const x=a[0]+ux*j*12,y=a[1]+uy*j*12;ctx.moveTo(x-uy*4,y+ux*4);ctx.lineTo(x+uy*4,y-ux*4)}});
+    });
+    ctx.lineWidth=1.6;ctx.strokeStyle='#59636b';ctx.stroke();
+    S.aroutes.forEach(R=>{
+      const q=rpts(R);if(q.length<2)return;ln(ctx,q,2.5,R.c,[12,9]);
+      R.s.map(aptOf).filter(Boolean).forEach(a=>{const p=cen(a);ctx.beginPath();ctx.arc(p[0],p[1],7,0,7);ctx.fillStyle=R.c;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=P.wh;ctx.stroke()});
+      (R.legs||[]).forEach(l=>l.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fillStyle=R.c;ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle=P.wh;ctx.stroke()}));
+    });
+    const s=City.sel;
+    if(s&&['rwys','taxis','fences'].includes(s.k))ln(ctx,s.o.pts,(+s.o.w||6)+10,'#0c8a8670');
+    else if(s&&s.k==='aroutes')ln(ctx,rpts(s.o),10,'#0c8a8670');
+    else if(s&&s.k==='stands'){ctx.beginPath();ctx.arc(s.o.x,s.o.y,34,0,7);ctx.fillStyle='#0c8a8670';ctx.fill()}
+    else if(s&&s.k==='airports'){ctx.beginPath();s.o.pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.lineWidth=4;ctx.strokeStyle='#0c8a86';ctx.stroke()}
+    if(dr&&dr.t===City.tool){const q=dr.pts.concat([M]);ln(ctx,dr.t==='apt'?q.concat([dr.pts[0]]):q,2.5,'#0c8a86',[8,6])}
+    if(ar&&City.tool==='aroute'){
+      const q=draftPts();ln(ctx,q.concat([M]),3,'#0c8a86',[8,6]);
+      ar.legs.concat([ar.cur]).forEach(l=>l.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fillStyle='#0c8a86';ctx.fill()}));
+    }
+    fpos=[];
+    fl.slice().sort((a,b)=>a.alt-b.alt).forEach(f=>{
+      const m=PLANES[f.pl.m]||PLANES[MK[0]],sp=specOf(f.pl),L=m.l/mpu(),sc=1+(f.alt||0)*.22;
+      if(f.alt>.02){ctx.save();ctx.translate(f.x+f.alt*14,f.y+f.alt*20);ctx.rotate(f.an);ctx.scale(sc,sc);drawPlane(ctx,L,m.sp*L/m.l,sp,true);ctx.restore()}
+      ctx.save();ctx.translate(f.x,f.y);ctx.rotate(f.an);ctx.scale(sc,sc);drawPlane(ctx,L,m.sp*L/m.l,sp,false);ctx.restore();
+      fpos.push({x:f.x,y:f.y,r:Math.max(L/2,12),f});
+    });
+  });
+
+  /* окно с фото самолёта */
+  cv.addEventListener('pointerdown',e=>dn=[e.clientX,e.clientY]);
+  cv.addEventListener('pointerup',e=>{
+    if(!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
+    const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k,h=[...fpos].reverse().find(q=>Math.hypot(q.x-x,q.y-y)<q.r);
+    if(!h)return;
+    const pl=h.f.pl,sp=specOf(pl),name=pl.m+' ('+pl.al+')',seats=(PLANES[pl.m]||PLANES[MK[0]]).seats;
+   $('#pop').innerHTML=`<b>${E(name)}</b><div style="color:var(--mut)">${E(h.f.R.n)}</div>`+(sp.img?`<img src="${E(sp.img)}" alt="${E(name)}" onerror="this.outerHTML='<small>Нет файла ${E(sp.img)} рядом с index.html</small>'">`:'')+'<div class="row"><button id="pc3" class="b">Закрыть</button></div>';
+    $('#pop').hidden=false;$('#pc3').onclick=()=>$('#pop').hidden=true;
+  });
+  (function loop(){
+    const n=performance.now(),dt=Math.min(.1,(n-T0)/1000);T0=n;
+    ensure();fl.forEach(f=>step(f,dt));if(fl.length)City.redraw();
+    requestAnimationFrame(loop);
+  })();
+})();
+</script>
 </body>
 </html>
