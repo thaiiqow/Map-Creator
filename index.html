@@ -620,7 +620,7 @@ City.register({
   const MODELS={'MAZ 206.948':{img:'maz206_948.png',l:12},'MAZ 206.063':{img:'maz206_063.webp',l:12,top:maz063},'Yutong ZK6890HGQ':{img:'yutong_zk6890hgq.png',l:9,top:yutong}};
   const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
   const pathOf=R=>{const b=R=>{const a=R.s.map(i=>City.S.stops.find(s=>s.id===i)).filter(Boolean).map(s=>[s.x,s.y]);if(R.loop&&a.length)a.push(a[0]);return a};return City.path?City.path(R,b):b(R)};
-  const CI=new WeakMap();
+  City.busKit={MODELS,drawBus:(...a)=>drawBus(...a)};const CI=new WeakMap();
   const info=pts=>{let m=CI.get(pts);if(!m){const c=[0];for(let i=1;i<pts.length;i++)c.push(c[i-1]+Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]));m={c,L:c[c.length-1]};CI.set(pts,m)}return m};
   function at(pts,d,loop){
     const m=info(pts);if(pts.length<2||!m.L)return null;
@@ -696,7 +696,7 @@ City.register({
     }
     /* автобусы */
     bpos=[];
-    S.routes.forEach(R=>{const bs=R.buses;if(!bs||!bs.length)return;const pts=pathOf(R),m=info(pts),per=m.L*(R.loop?1:2),v=(30/3.6)*4/mpu();
+    S.routes.forEach(R=>{return;const bs=R.buses;const pts=pathOf(R),m=info(pts),per=m.L*(R.loop?1:2),v=(30/3.6)*4/mpu();
       bs.forEach((b,i)=>{const q=at(pts,clock*v+i*per/bs.length,R.loop);if(!q)return;const lm=(MODELS[b.m]||{l:12}).l;drawBus(ctx,q,lm,b.c,(MODELS[b.m]||{}).top);bpos.push({x:q.x,y:q.y,L:Math.max(lm/mpu(),22),b,R})});
     });
     /* экранные слои: координатная сетка и компас */
@@ -988,352 +988,241 @@ City.register({
   })();
 })();
 </script>
+<!-- ===== БЛОК A: вставить ПЕРЕД скриптом «Плагин: поворот карты» ===== -->
 <script>
-/* Плагин: аэропорты (территория, ВПП, РД, стоянки, здания, забор) и самолёты на маршрутах */
+/* Плагин: автобусы по полосам и светофорам, расписание, вариации маршрута, прибытие на остановках; 1 игровая минута = 25 с */
 (function(){
-  const D=()=>City.S,mpu=()=>((D().scale||50)/50),E=City.esc;
-  const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
-  const K=p=>(Math.round(p[0]*10)/10)+','+(Math.round(p[1]*10)/10);
+const E=City.esc,MIN=25,DW=4,KMH=[25,35,45,55];
+const mpu=()=>((City.S.scale||50)/50),clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const sb=id=>City.S.stops.find(s=>s.id===id);
+const tripC=new Map();City.on('change',()=>tripC.clear());
+document.head.insertAdjacentHTML('beforeend','<style>#insp{overflow:auto;max-height:calc(100% - 20px)}@media(max-width:760px){#insp{max-height:calc(100% - 150px)}}.sl{position:relative;margin:4px 0 0 6px;padding:4px 0 4px 20px}.sl::before{content:"";position:absolute;left:5px;top:22px;bottom:22px;width:2px;background:var(--c);border-radius:1px}.si{position:relative;padding:9px 0;font-weight:700;font-size:13px;cursor:pointer}.si::before{content:"";position:absolute;left:-20px;top:50%;width:8px;height:8px;margin-top:-6px;border-radius:50%;background:var(--pan);border:2px solid var(--c)}.si.lp{opacity:.55}.eta{display:flex;justify-content:space-between;gap:8px;padding:6px 10px;border-radius:8px;background:var(--bg);font-size:13px}#vl{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto}#vl li{border:1px solid var(--line);border-radius:10px;padding:8px}#vl small{display:block;color:var(--mut);margin:4px 0}</style>');
+$('#wrap').insertAdjacentHTML('beforeend','<div id="vbar" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:112px;padding:8px 14px;display:flex;gap:8px;align-items:center"><span id="vn"></span><button id="vok" class="b p">Готово</button><button id="vno" class="b">Отмена</button></div>');
+document.body.insertAdjacentHTML('beforeend','<dialog id="vdlg"></dialog>');
+City.HINT.rvar='Нажимайте остановки варианта по порядку. Первая остановка ещё раз — замкнуть кольцо. «Готово» — закончить.';
 
-  /* ===== Модели самолётов. Добавляйте авиакомпании/модели сюда: img — файл рядом с index.html, l/sp — длина и размах крыла в метрах ===== */
-  const PLANES={
-  'Boeing 737':{l:39.5,sp:35.8,seats:189,al:{
-    'S7 Airlines':{img:'b737s7.png',fus:'#b6e51c',tail:'#b6e51c',eng:'#3fae3a',wing:'#dfe5e8'},
-    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
-  'Airbus A321':{l:44.5,sp:35.8,seats:236,al:{
-    'VietJet':{img:'vja321.png',fus:'#f6f7f7',rear:'#d9232d',tail:'#d9232d',eng:'#d9232d',wing:'#e3e7ea',tip:true},
-    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
-  'Boeing 777':{l:73.9,sp:64.8,seats:400,al:{
-    'Aeroflot':{img:'b777a.png',fus:'#eceff1',tail:'#1b2a6b',eng:'#1b2a6b',wing:'#dfe5e8'},
-    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}},
-  'Airbus A319':{l:33.8,sp:34.1,seats:156,al:{
-    'Aurora':{img:'aura319.png',fus:'#f6f7f7',rear:'#1c3c8f',tail:'#1c3c8f',eng:'#1f3f94',wing:'#e3e7ea',tip:true,tipc:'#f58220'},
-    'Без ливреи':{img:null,fus:'#f4f6f7',tail:'#f4f6f7',eng:'#d5dadd',wing:'#dfe5e8'}}}
-};
-  const MK=Object.keys(PLANES);
-  const specOf=pl=>{const m=PLANES[pl.m]||PLANES[MK[0]];return m.al[pl.al]||m.al[Object.keys(m.al)[0]]};
+/* ---------- игровое время ---------- */
+let gm=360,gk=null,prevTod=null,saveAt=0,last=performance.now();
+const tod=()=>((gm%1440)+1440)%1440;City.gm=()=>gm;
+function loadGm(){const k='citymap:gm:'+idx.cur;if(k===gk)return;try{if(gk)localStorage.setItem(gk,String(gm));const t=localStorage.getItem(k);gm=t?+t:360;if(!(gm>=0))gm=360}catch(e){gm=360}gk=k;prevTod=null}
+const fmtMin=m=>{const r=Math.round(m);return r<1?'менее минуты':r<60?r+' мин':Math.floor(r/60)+' ч '+(r%60)+' мин'};
+const fmtLen=m=>m<1000?Math.round(m)+' м':(m/1000).toFixed(2).replace('.',',')+' км';
+function parseDep(s){const a=[];String(s||'').split(/[,;\s]+/).forEach(t=>{const m=/^(\d{1,2})[:.](\d{2})$/.exec(t);if(m&&+m[1]<24&&+m[2]<60)a.push(+m[1]*60+ +m[2])});return a}
 
-  /* здания аэропорта — обычные здания с новыми типами */
-  BLD.terminal=['Терминал','#cdd6df',120];BLD.hangar=['Ангар','#b9c0c7',90];BLD.tower=['Диспетчерская вышка','#e3d9c6',24];
+/* ---------- маршруты по полосам ---------- */
+function offv(p,d){const nm=(a,b)=>{const x=b[0]-a[0],y=b[1]-a[1],l=Math.hypot(x,y)||1;return[-y/l,x/l]};
+  return p.map((q,i)=>{const n1=i?nm(p[i-1],q):null,n2=i<p.length-1?nm(q,p[i+1]):null,e=d[i];
+    if(!n1)return[q[0]+n2[0]*e,q[1]+n2[1]*e];if(!n2)return[q[0]+n1[0]*e,q[1]+n1[1]*e];
+    let mx=n1[0]+n2[0],my=n1[1]+n2[1];const ml=Math.hypot(mx,my)||1;mx/=ml;my/=ml;const c=Math.max(.5,mx*n1[0]+my*n1[1]);return[q[0]+mx*e/c,q[1]+my*e/c]})}
+function roadAt(p){let b=null;City.S.roads.forEach(R=>{for(let i=1;i<R.pts.length;i++){const d=dseg(p,R.pts[i-1],R.pts[i]);if(!b||d<b.d)b={d,R}}});return b}
+function buildTrip(ids,loop){
+  const key=ids.join()+(loop?'L':'');if(tripC.has(key))return tripC.get(key);
+  let res=null;const list=loop?ids.concat(ids[0]):ids,st=list.map(sb);
+  if(list.length>1&&st.every(Boolean)){
+    const c0=[],ix=[0];
+    for(let i=0;i<st.length-1;i++){
+      const a=st[i],b=st[i+1],raw=()=>[[a.x,a.y],[b.x,b.y]];
+      let leg=(City.path?City.path({s:[a.id,b.id],loop:false},raw):raw()).slice();
+      if(leg.length>2){if(leg[0][0]===a.x&&leg[0][1]===a.y)leg.shift();const z=leg[leg.length-1];if(leg.length>1&&z[0]===b.x&&z[1]===b.y)leg.pop()}
+      leg.forEach(p=>{const l=c0[c0.length-1];if(!l||Math.hypot(l[0]-p[0],l[1]-p[1])>.01)c0.push(p)});
+      ix.push(c0.length-1);
+    }
+    if(c0.length<2&&c0.length)c0.push([c0[0][0]+.1,c0[0][1]]);
+    if(c0.length>1){
+      const n=c0.length,sd=[],ty=[];
+      for(let i=1;i<n;i++){const r=roadAt([(c0[i-1][0]+c0[i][0])/2,(c0[i-1][1]+c0[i][1])/2]);
+        if(r&&r.d<RW[r.R.t]/2+6){const w=RW[r.R.t];sd.push((w-w/LN[r.R.t])/2);ty.push(r.R.t)}else{sd.push(0);ty.push(1)}}
+      const pts=offv(c0,c0.map((_,i)=>i===0?sd[0]:i===n-1?sd[n-2]:(sd[i-1]+sd[i])/2)),c=[0];let hs=0;
+      for(let i=1;i<n;i++){const l=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);c.push(c[i-1]+l);hs+=l/KMH[ty[i-1]]}
+      const L=c[n-1],lt=[];
+      (City.S.lights||[]).forEach(l=>{let b=null;for(let i=1;i<n;i++){const d=dseg([l.x,l.y],pts[i-1],pts[i]);if(!b||d<b.d)b={d,i}}
+        if(b&&b.d<22){const a=pts[b.i-1],z=pts[b.i],dx=z[0]-a[0],dy=z[1]-a[1],q=dx*dx+dy*dy,t=q?clamp(((l.x-a[0])*dx+(l.y-a[1])*dy)/q,0,1):0;lt.push(c[b.i-1]+t*(c[b.i]-c[b.i-1]))}});
+      res={key,pts,c,L,ty,lt,kmh:hs?L/hs:35,stops:list.map((id,k)=>({id,s:c[ix[k]]}))};
+    }
+  }
+  tripC.set(key,res);return res;
+}
+const bvar=(R,b)=>{const v=(b.v===undefined||b.v===''||b.v===null)?-1:+b.v;return v>=0&&R.vars&&R.vars[v]?v:-1};
+const effC=new WeakMap();
+function eff(R,vi){if(vi<0)return R;const v=R.vars[vi];let e=effC.get(v);if(!e||e.R0!==R){e=Object.create(R);e.R0=R;effC.set(v,e)}e.n=R.n+' · '+(v.n||'вариант');e.s=v.s;e.loop=!!v.loop;return e}
+function trips(R,b){const e=eff(R,bvar(R,b)),ids=e.s.filter(sb);return{e,F:buildTrip(ids,!!e.loop),B:e.loop?null:buildTrip(ids.slice().reverse(),false)}}
+const seg=(tr,d)=>{let i=1;while(i<tr.c.length-1&&tr.c[i]<d)i++;return i};
 
-  const cen=a=>[a.pts.reduce((s,p)=>s+p[0],0)/a.pts.length,a.pts.reduce((s,p)=>s+p[1],0)/a.pts.length];
-  const aptOf=id=>D().airports.find(a=>a.id===id);
-  const rwysOf=a=>D().rwys.filter(r=>inPoly(r.pts[0],a.pts)||inPoly(r.pts[r.pts.length-1],a.pts));
-  const standsOf=a=>D().stands.filter(s=>inPoly([s.x,s.y],a.pts));
-  const plen=a=>a.slice(1).reduce((s,p,i)=>s+dst(p,a[i]),0);
-  const near=(p,pts,r)=>pts.slice(1).some((q,i)=>dseg(p,pts[i],q)<r);
-  let dr=null,ar=null,M=[0,0],G=null,fl=[],Sref=null,need=true,T0=performance.now(),dn=null,fpos=[];
-  City.on('change',()=>{G=null;need=true});
-  cv.addEventListener('pointermove',e=>{const V=City.view;M=[(e.offsetX-V.x)/V.k,(e.offsetY-V.y)/V.k]});
+/* ---------- состояние автобусов ---------- */
+const BS=new WeakMap();
+const getSt=b=>{let s=BS.get(b);if(!s){s={run:false,leg:0,d:0,v:0,dw:0,si:1,fin:false,tr:null,x:0,y:0,an:undefined};BS.set(b,s)}return s};
+function place(st,dt){
+  const tr=st.tr,i=seg(tr,st.d),a=tr.pts[i-1],b=tr.pts[i],l=(tr.c[i]-tr.c[i-1])||1,t=clamp((st.d-tr.c[i-1])/l,0,1);
+  st.x=a[0]+(b[0]-a[0])*t;st.y=a[1]+(b[1]-a[1])*t;
+  const ta=Math.atan2(b[1]-a[1],b[0]-a[0]);
+  if(st.an===undefined||!dt)st.an=ta;else{let da=ta-st.an;da=Math.atan2(Math.sin(da),Math.cos(da));st.an+=da*Math.min(1,dt*8)}
+}
+function start(st,T,leg,d){
+  const tr=leg?T.B:T.F;if(!tr){st.run=false;return}
+  st.tr=tr;st.leg=leg;st.d=d;st.v=0;st.dw=0;st.fin=false;
+  st.si=tr.stops.findIndex(s=>s.s>d+.5);if(st.si<0)st.si=tr.stops.length-1;
+  st.run=true;place(st,0);
+}
+function endTrip(st,T){
+  if(T.e.loop){if(st.sch)st.run=false;else start(st,T,0,0);return}
+  if(st.leg===0&&T.B){start(st,T,1,0);return}
+  if(st.sch)st.run=false;else start(st,T,0,0);
+}
+function step(en,dt,all){
+  const st=en.st,tr=st.tr,T=en.T;if(!tr)return;
+  const m=City.busKit.MODELS[en.b.m]||{l:12},L=Math.max(m.l/mpu(),22),W=L*.34;
+  if(st.dw>0){st.dw-=dt;st.v=0;if(st.dw<=0&&st.fin)endTrip(st,T);return}
+  const i=seg(tr,st.d),vmax=KMH[tr.ty[i-1]]*.85/3.6*4/mpu(),nx=tr.stops[st.si];let tv=vmax,lim=1e9;
+  if(nx){const rem=nx.s-st.d;
+    if(rem<=.6){st.d=nx.s;st.v=0;st.dw=DW*(.7+Math.random()*.6);st.si++;if(st.si>=tr.stops.length)st.fin=true;place(st,0);return}
+    tv=Math.min(tv,Math.sqrt(2*(vmax/3)*rem)+2);lim=rem}
+  else{endTrip(st,T);return}
+  /* светофоры */
+  const a=tr.pts[i-1],b=tr.pts[i],axis=Math.abs(b[0]-a[0])>Math.abs(b[1]-a[1])?0:1,sd=10+L/2;
+  for(const s of tr.lt){const dd=s-st.d;if(dd<sd-1||dd>40)continue;
+    const ph=City.lightPhase?City.lightPhase(axis):'g';if(ph==='g'||(ph==='y'&&dd<sd+10))continue;
+    tv=Math.min(tv,vmax*Math.min(1,(dd-sd)/24));lim=Math.min(lim,Math.max(0,dd-sd))}
+  /* автобус впереди */
+  const ca=Math.cos(st.an),sa=Math.sin(st.an);
+  all.forEach(o=>{if(o===st||!o.run)return;const dx=o.x-st.x,dy=o.y-st.y,f=ca*dx+sa*dy,la=Math.abs(-sa*dx+ca*dy);
+    if(f>0&&f<L*3&&la<W*1.1&&Math.cos(o.an-st.an)>.3){const gap=f-L;tv=Math.min(tv,vmax*Math.max(0,gap/(L*2)));lim=Math.min(lim,Math.max(0,gap-1))}});
+  st.v+=(tv-st.v)*Math.min(1,dt*2.5);
+  st.d=Math.min(tr.L,st.d+Math.min(lim,Math.max(0,st.v)*dt));
+  place(st,dt);
+}
+let ents=[],hit=[];
+(function frame(){
+  const n=performance.now(),dt=Math.min(.1,Math.max(0,(n-last)/1000));last=n;
+  loadGm();gm+=dt/MIN;const t1=tod(),t0=prevTod;prevTod=t1;
+  if(Date.now()-saveAt>5000){saveAt=Date.now();try{localStorage.setItem(gk,String(gm))}catch(e){}}
+  ents=[];City.S.routes.forEach(R=>(R.buses||[]).forEach((b,i)=>ents.push({R,b,i,n:R.buses.length})));
+  ents.forEach(en=>{
+    const T=trips(en.R,en.b),st=getSt(en.b),sc=parseDep(en.b.dep);en.T=T;en.e=T.e;en.st=st;st.sch=sc.length>0;
+    if(!T.F){st.run=false;return}
+    if(st.run){const kk=st.tr.key;if(kk!==T.F.key&&!(T.B&&kk===T.B.key))st.run=false;else{const nt=kk===T.F.key?T.F:T.B;if(nt!==st.tr){st.tr=nt;st.d=Math.min(st.d,nt.L)}}}
+    if(!st.run){
+      if(!st.sch)start(st,T,0,T.F.L*((en.i+.5)/en.n));
+      else if(t0!==null&&sc.some(t=>t0<=t1?(t>t0&&t<=t1):(t>t0||t<=t1)))start(st,T,0,0);
+    }
+  });
+  if(ents.length){
+    if($('#bs').classList.contains('on')){const all=ents.map(e=>e.st);ents.forEach(en=>{if(en.st.run)step(en,dt,all)})}
+    City.redraw();
+  }
+  requestAnimationFrame(frame);
+})();
 
-  /* ---------- панель «Готово» для рисования ---------- */
-  $('#wrap').insertAdjacentHTML('beforeend','<div id="apb" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:112px;padding:8px 14px;display:flex;gap:8px;align-items:center"><span id="apn"></span><button id="apok" class="b p">Готово</button><button id="apno" class="b">Отмена</button></div>');
-  const ui=()=>{
-    if(dr&&dr.t!==City.tool)dr=null;if(ar&&City.tool!=='aroute')ar=null;
-    const act=!!(dr||ar);$('#apb').hidden=!act;
-    if(act)$('#apn').textContent=dr?'Точек: '+dr.pts.length:'Аэропортов: '+ar.s.length;
+/* ---------- время прибытия на остановку ---------- */
+function etaSec(R,b,id){
+  const st=BS.get(b);if(!st)return null;const T=trips(R,b);if(!T.F)return null;
+  let best=null;const take=v=>{if(best===null||v<best)best=v};
+  const vc=tr=>(tr.kmh*.85/3.6*4/mpu())||1;
+  const plan=(leg,d,off,incl)=>{
+    let tr=leg?T.B:T.F,cur=d,k=0,l=leg;
+    while(tr&&k<3){
+      const v=vc(tr);
+      tr.stops.forEach(s=>{if(s.id!==id)return;if(k>0||(incl?s.s>=cur-.5:s.s>cur+.5))take(off+(s.s-cur)/v)});
+      off+=(tr.L-cur)/v+DW;cur=0;k++;
+      if(T.e.loop)tr=st.sch?null:T.F;
+      else if(l===0&&T.B){l=1;tr=T.B}else{tr=st.sch?null:T.F;l=0}
+    }
   };
-  $('#apok').onclick=()=>{endDraw();endRoute();City.redraw()};
-  $('#apno').onclick=()=>{dr=ar=null;City.redraw()};
-  addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;if(e.key==='Enter'){endDraw();endRoute()}if(e.key==='Escape')dr=ar=null;City.redraw()});
-
-  /* ---------- рисование линий и территорий ---------- */
-  function stroke(kind,p){
-    const k=City.view.k;
-    if(!dr||dr.t!==kind){dr={t:kind,pts:[p]};return}
-    const l=dr.pts[dr.pts.length-1],f=dr.pts[0];
-    if(dst(l,p)<6/k||(kind==='apt'&&dr.pts.length>2&&dst(f,p)<14/k)){endDraw();return}
-    dr.pts.push(p);
-  }
-  function endDraw(){
-    if(!dr)return;const d=dr,S=D();dr=null;
-    if(d.t==='apt'&&d.pts.length>2)City.add('airports',{id:S.id++,pts:d.pts,n:'Аэропорт '+(S.airports.length+1)});
-    else if(d.t==='rwy'&&d.pts.length>1)City.add('rwys',{pts:d.pts,n:'ВПП '+(S.rwys.length+1),w:30});
-    else if(d.t==='taxi'&&d.pts.length>1)City.add('taxis',{pts:d.pts,n:'РД '+(S.taxis.length+1),w:14});
-    else if(d.t==='fence'&&d.pts.length>1)City.add('fences',{pts:d.pts,n:'Забор'});
-  }
-  function endRoute(){
-    if(!ar)return;const a=ar,S=D();ar=null;
-    if(a.s.length>1)City.add('aroutes',{n:'Рейс '+(S.aroutes.length+1),c:RC[S.aroutes.length%6],s:a.s,loop:!!a.loop,planes:[{m:MK[0],al:Object.keys(PLANES[MK[0]].al)[0]}]});
-  }
-
-  /* ---------- регистрация инструментов ---------- */
-  const G0='Транспорт/Аэропорт';
-  const lenI=o=>`<div style="font-size:13px;color:var(--mut)">Длина: <b style="color:var(--ink)">${Math.round(plen(o.pts)*mpu()).toLocaleString('ru-RU')} м</b></div>`;
-  const widI=d=>o=>`<label>Ширина<input type="number" min="4" data-f="w" value="${E(o.w||d)}"></label>`+lenI(o);
-  City.register({key:'airports',label:'Аэропорт',group:G0,leaf:'Территория аэропорта',color:'#8ea1ad',tool:'apt',
-    hint:'Обведите территорию аэропорта точками. Клик по первой точке, двойной клик или «Готово» — закончить. Выбрать территорию — нажать на её границу.',click:p=>stroke('apt',p)});
-  City.register({key:'rwys',label:'Взлётная полоса',group:G0,leaf:'Взлётная полоса',color:'#4a5258',tool:'rwy',
-    hint:'Ставьте точки полосы. Двойной клик или «Готово» — закончить.',click:p=>stroke('rwy',p),
-    hit:(p,r)=>D().rwys.find(R=>near(p,R.pts,(+R.w||30)/2+r)),inspector:widI(30)});
-  City.register({key:'taxis',label:'Рулёжная дорожка',group:G0,leaf:'Рулёжная дорожка',color:'#7a838a',tool:'taxi',
-    hint:'Ставьте точки рулёжной дорожки. Двойной клик или «Готово» — закончить.',click:p=>stroke('taxi',p),
-    hit:(p,r)=>D().taxis.find(R=>near(p,R.pts,(+R.w||14)/2+r)),inspector:widI(14)});
-  City.register({key:'stands',label:'Стоянка самолёта',group:G0,leaf:'Стоянка самолётов',color:'#e0b400',tool:'stand',
-    hint:'Нажмите на карту, чтобы поставить стоянку. Угол носа задаётся в карточке.',
-    click:p=>City.add('stands',{x:p[0],y:p[1],a:0,n:'Стоянка '+(D().stands.length+1)}),
-    hit:(p,r)=>D().stands.find(s=>dst([s.x,s.y],p)<r+18),
-    inspector:o=>`<label>Угол носа, °<input type="number" data-f="a" value="${E(o.a||0)}"></label>`});
-  City.addLeaf(G0,['Терминал','bld','terminal','#cdd6df']);
-  City.addLeaf(G0,['Ангар','bld','hangar','#b9c0c7']);
-  City.addLeaf(G0,['Диспетчерская вышка','bld','tower','#e3d9c6']);
-  City.register({key:'fences',label:'Забор',group:G0,leaf:'Забор',color:'#59636b',tool:'fence',
-    hint:'Ставьте точки забора. Двойной клик или «Готово» — закончить.',click:p=>stroke('fence',p),
-    hit:(p,r)=>D().fences.find(F=>near(p,F.pts,r+3)),inspector:lenI});
-  const rpts=R=>{const q=R.s.map(aptOf).filter(Boolean).map(cen);if(R.loop&&q.length)q.push(q[0]);return q};
-  City.register({key:'aroutes',label:'Маршрут самолётов',group:G0,leaf:'Маршрут самолётов',color:'#2e86ab',tool:'aroute',
-    hint:'Нажимайте на территории аэропортов по порядку. Первый аэропорт ещё раз — замкнуть кольцо. «Готово» — закончить.',
-    click(p,r){
-      const a=D().airports.find(a=>inPoly(r,a.pts));if(!a)return;
-      if(!ar)ar={s:[a.id],loop:false};
-      else if(a.id===ar.s[0]&&ar.s.length>2){ar.loop=true;endRoute()}
-      else if(a.id!==ar.s[ar.s.length-1])ar.s.push(a.id);
-    },
-    hit:(p,r)=>D().aroutes.find(R=>near(p,rpts(R),r+2)),
-    inspector:o=>{
-      const ps=o.planes||[];
-      return `<div style="font-size:13px;color:var(--mut)">Аэропортов: <b style="color:var(--ink)">${o.s.length}</b>${o.loop?', кольцо':''}</div><label>Самолёты на маршруте</label>`
-      +ps.map((p,i)=>`<div style="display:flex;flex-direction:column;gap:4px"><div class="row" style="justify-content:flex-start;flex-wrap:nowrap"><select data-pi="${i}" data-pf="m" style="margin:0;flex:1">${MK.map(k=>`<option ${k===p.m?'selected':''}>${k}</option>`).join('')}</select><button class="b danger" data-pdel="${i}" aria-label="Убрать">✕</button></div><select data-pi="${i}" data-pf="al" style="margin:0">${Object.keys((PLANES[p.m]||PLANES[MK[0]]).al).map(k=>`<option ${k===p.al?'selected':''}>${k}</option>`).join('')}</select></div>`).join('')
-      +'<button class="b" data-padd="1">+ Добавить самолёт</button>';
-    }});
-  /* территорию выбираем по границе и проверяем последней, чтобы она не перекрывала остальное */
-  City.hits.push({key:'airports',fn:(p,r)=>D().airports.find(a=>near(p,a.pts.concat([a.pts[0]]),r+3)||false)});
-
-  $('#insp').addEventListener('click',e=>{
-    const b=e.target.closest('button'),s=City.sel;if(!b||!s||s.k!=='aroutes')return;const o=s.o;
-    if(b.dataset.padd){City.push();o.planes=o.planes||[];o.planes.push({m:MK[0],al:Object.keys(PLANES[MK[0]].al)[0]});City.changed();City.updateUI()}
-    if(b.dataset.pdel&&o.planes){City.push();o.planes.splice(+b.dataset.pdel,1);City.changed();City.updateUI()}
+  if(st.run&&st.tr)plan(st.leg,st.d,0,false);
+  if(st.sch){const t0=tod(),ds=parseDep(b.dep).map(t=>{let m=t-t0;if(m<=0)m+=1440;return m});plan(0,0,Math.min(...ds)*MIN,true)}
+  return best;
+}
+City.stopEta=id=>{
+  const rows=[];
+  City.S.routes.forEach(R=>{
+    if(![R.s].concat((R.vars||[]).map(v=>v.s)).some(a=>a.includes(id)))return;
+    let best=null;(R.buses||[]).forEach(b=>{const v=etaSec(R,b,id);if(v!==null&&(best===null||v<best))best=v});
+    rows.push([R,best]);
   });
-  $('#insp').addEventListener('change',e=>{
-    const t=e.target,s=City.sel;if(t.dataset.pi==null||!s||s.k!=='aroutes'||!s.o.planes)return;
-    const p=s.o.planes[+t.dataset.pi];if(!p)return;p[t.dataset.pf]=t.value;
-    if(t.dataset.pf==='m'){p.al=Object.keys(PLANES[p.m].al)[0];City.updateUI()}
-    City.changed();
+  if(!rows.length)return '<div style="font-size:13px;color:var(--mut)">Маршрутов нет</div>';
+  rows.sort((a,b)=>(a[1]===null)-(b[1]===null)||a[1]-b[1]);
+  return '<b style="font-size:13px">Маршруты:</b>'+rows.map(([R,v])=>`<div class="eta"><span><i style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${E(R.c)};margin-right:6px"></i>${E(R.n)}</span><b>${v===null?'—':fmtMin(v/MIN)}</b></div>`).join('');
+};
+
+/* ---------- рисование и окно автобуса ---------- */
+City.layers.over.push((ctx,P)=>{
+  hit=[];const K=City.busKit;
+  ents.forEach(en=>{
+    const st=en.st;if(!st||!st.run)return;const m=K.MODELS[en.b.m]||{l:12};
+    K.drawBus(ctx,{x:st.x,y:st.y,an:st.an||0},m.l,en.b.c,m.top);
+    const o={x:st.x,y:st.y,L:Math.max(m.l/mpu(),22),b:en.b,R:en.e};
+    hit[hit.length]=o;[].push(o);
   });
+  const s=City.sel;
+  if(s&&s.k==='routes'&&s.o.vars)s.o.vars.forEach(v=>{const q=stopPts({s:v.s.filter(sb),loop:!!v.loop});if(q.length>1)line(q,5,s.o.c+'99',[10,8])});
+  const on=City.tool==='rvar'&&vm;$('#vbar').hidden=!on;if(!on){vm=null;return}
+  $('#vn').textContent='Остановок: '+vd.length;
+  const q=vd.map(sb).filter(Boolean).map(z=>[z.x,z.y]);if(q.length)line(q.concat([mouse]),4,'#0c8a86',[8,6]);
+  City.S.stops.forEach(z=>{ctx.beginPath();ctx.arc(z.x,z.y,14,0,7);ctx.lineWidth=2;ctx.strokeStyle='#0c8a86';ctx.stroke()});
+});
+let dn=null;cv.addEventListener('pointerdown',e=>{dn=[e.clientX,e.clientY]});
+cv.addEventListener('pointerup',e=>{
+  if(!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
+  const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k,h=hit.find(q=>Math.hypot(q.x-x,q.y-y)<Math.max(q.L/2,10));
+  if(!h)return;const m=City.busKit.MODELS[h.b.m]||{};
+  $('#pop').innerHTML=`<b>${E(h.b.m)}</b><div style="color:var(--mut)">${E(h.R.n)}</div>`+(m.img?`<img src="${E(m.img)}" alt="${E(h.b.m)}" onerror="this.outerHTML='<small>Нет файла ${E(m.img)} рядом с index.html</small>'">`:'')+'<div class="row"><button id="pc5" class="b">Закрыть</button></div>';
+  $('#pop').hidden=false;$('#pc5').onclick=()=>$('#pop').hidden=true;
+});
 
-  /* ---------- граф рулёжных дорожек ---------- */
-  function proj(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));const q=[a[0]+dx*t,a[1]+dy*t];return{t,q,d:dst(p,q)}}
-  function buildG(){
-    const S=D(),P=S.rwys.concat(S.taxis),sg=[],lk=[];
-    P.forEach((R,ri)=>{for(let i=1;i<R.pts.length;i++)sg.push({a:R.pts[i-1],b:R.pts[i],ri,sp:[{t:0,p:R.pts[i-1]},{t:1,p:R.pts[i]}]})});
-    for(let i=0;i<sg.length;i++)for(let j=i+1;j<sg.length;j++){
-      const s=sg[i],u=sg[j];if(s.ri===u.ri)continue;
-      const r=[s.b[0]-s.a[0],s.b[1]-s.a[1]],q=[u.b[0]-u.a[0],u.b[1]-u.a[1]],den=r[0]*q[1]-r[1]*q[0];
-      if(Math.abs(den)<1e-9)continue;
-      const w=[u.a[0]-s.a[0],u.a[1]-s.a[1]],t=(w[0]*q[1]-w[1]*q[0])/den,v=(w[0]*r[1]-w[1]*r[0])/den,e=1e-6;
-      if(t<-e||t>1+e||v<-e||v>1+e)continue;
-      const p=[s.a[0]+r[0]*t,s.a[1]+r[1]*t];s.sp.push({t,p});u.sp.push({t:v,p});
-    }
-    const attach=(e,maxD)=>{let best=null;sg.forEach(s=>{const r=proj(e,s.a,s.b);if(!best||r.d<best.r.d)best={s,r}});
-      if(best&&best.r.d<maxD&&best.r.d>.05){best.s.sp.push({t:best.r.t,p:best.r.q});lk.push([e,best.r.q])}};
-    P.forEach(R=>{[R.pts[0],R.pts[R.pts.length-1]].forEach(e=>{
-      let best=null;sg.forEach(s=>{if(P[s.ri]===R)return;const r=proj(e,s.a,s.b);if(r.d<12&&(!best||r.d<best.r.d))best={s,r}});
-      if(best&&best.r.d>.05){best.s.sp.push({t:best.r.t,p:best.r.q});lk.push([e,best.r.q])}})});
-    S.stands.forEach(st=>attach([st.x,st.y],500));
-    const idx=new Map(),pts=[],adj=[];
-    const node=p=>{const k=K(p);if(!idx.has(k)){idx.set(k,pts.length);pts.push(p);adj.push([])}return idx.get(k)};
-    const edge=(p,q)=>{const a=node(p),b=node(q);if(a===b)return;const w=dst(p,q);adj[a].push([b,w]);adj[b].push([a,w])};
-    sg.forEach(s=>{s.sp.sort((x,y)=>x.t-y.t);for(let i=1;i<s.sp.length;i++)edge(s.sp[i-1].p,s.sp[i].p)});
-    lk.forEach(l=>edge(l[0],l[1]));
-    return{idx,pts,adj};
-  }
-  function gpath(a,b){
-    if(!G)G=buildG();
-    const s=G.idx.get(K(a)),t=G.idx.get(K(b));if(s==null||t==null)return null;
-    const n=G.pts.length,d=new Array(n).fill(Infinity),pr=new Array(n).fill(-1),done=new Array(n).fill(false);d[s]=0;
-    for(;;){
-      let u=-1;for(let i=0;i<n;i++)if(!done[i]&&d[i]<Infinity&&(u<0||d[i]<d[u]))u=i;
-      if(u<0||u===t)break;done[u]=true;
-      G.adj[u].forEach(([v,w])=>{if(d[u]+w<d[v]){d[v]=d[u]+w;pr[v]=u}});
-    }
-    if(d[t]===Infinity)return null;
-    const out=[];for(let u=t;u>=0;u=pr[u])out.push(G.pts[u]);return out.reverse();
-  }
+/* ---------- карточка маршрута: схема остановок, автобусы, расписание ---------- */
+const stopList=(ids,c,loop)=>{const a=ids.map(sb).filter(Boolean);if(!a.length)return '<div style="font-size:12px;color:var(--mut)">Нет остановок</div>';
+  return `<div class="sl" style="--c:${E(c)}">`+a.map(s=>`<div class="si" data-gs="${s.id}">${E(s.n)}</div>`).join('')+(loop?`<div class="si lp" data-gs="${a[0].id}">${E(a[0].n)} ↻</div>`:'')+'</div>'};
+City.insp.routes=o=>{
+  const T0=buildTrip(o.s.filter(sb),!!o.loop),bs=o.buses||[],vs=o.vars||[],ms=Object.keys(City.busKit.MODELS);
+  return `<div style="font-size:13px;color:var(--mut)">Длина: <b style="color:var(--ink)">${fmtLen(T0?T0.L*mpu():0)}</b>${o.loop?', кольцо':''}</div><label>Остановки</label>`+stopList(o.s,o.c,o.loop)
+  +vs.map(v=>`<details><summary>${E(v.n)}</summary>${stopList(v.s,o.c,v.loop)}</details>`).join('')
+  +`<button class="b" data-vopen="1">Вариации маршрута${vs.length?' ('+vs.length+')':''}</button><label>Автобусы на маршруте</label>`
+  +bs.map((b,i)=>`<div style="display:flex;flex-direction:column;gap:4px;padding:6px 0;border-top:1px solid var(--line)"><div class="row" style="justify-content:flex-start;align-items:center;flex-wrap:nowrap"><select data-bi="${i}" data-bf="m" style="flex:1;margin:0">${ms.map(k=>`<option ${k===b.m?'selected':''}>${k}</option>`).join('')}</select><input type="color" data-bi="${i}" data-bf="c" value="${b.c}" style="width:44px;margin:0;padding:2px"><button class="b danger" data-bdel="${i}" aria-label="Убрать">✕</button></div>`
+    +(vs.length?`<select data-bi="${i}" data-bf="v" style="margin:0"><option value="">Основной маршрут</option>${vs.map((v,j)=>`<option value="${j}" ${bvar(o,b)===j?'selected':''}>${E(v.n)}</option>`).join('')}</select>`:'')
+    +`<input data-bi="${i}" data-bf="dep" value="${E(b.dep||'')}" placeholder="Выезд: 07:00, 07:30 (пусто — ездит постоянно)" style="margin:0"></div>`).join('')
+  +'<button class="b" data-badd="1">+ Добавить автобус</button>';
+};
 
-  /* ---------- самолёты: стоянка -> рулёжка -> разбег -> полёт -> посадка -> рулёжка -> стоянка ---------- */
-  const peek=f=>{const n=f.R.s.length;if(f.R.loop)return{i:(f.i+1)%n,dir:1};let d=f.dir;if(f.i+d>=n||f.i+d<0)d=-d;return{i:f.i+d,dir:d}};
-  function pickStand(a,me){
-    const ss=standsOf(a),free=ss.filter(s=>!fl.some(o=>o!==me&&o.st===s)),arr=free.length?free:ss;
-    return arr.length?arr[Math.floor(Math.random()*arr.length)]:null;
+/* ---------- вариации маршрута ---------- */
+let vm=null,vd=[],vloop=false,vr=null;
+const dlg=$('#vdlg'),names=ids=>ids.map(sb).filter(Boolean).map(s=>E(s.n)).join(' → ')||'—';
+function vRender(){
+  const R=vr,vs=R.vars||[];
+  dlg.innerHTML=`<h2>Вариации маршрута</h2><p>${E(R.n)}. Создайте варианты (короткий рейс, другой путь) и назначьте их автобусам в карточке маршрута.</p><ul id="vl"><li><b>Основной</b><small>${names(R.s)}</small></li>`
+  +vs.map((v,i)=>`<li><div class="row" style="flex-wrap:nowrap;justify-content:flex-start"><input data-vn="${i}" value="${E(v.n)}" style="margin:0"><button class="b danger" data-vdel="${i}" aria-label="Удалить">✕</button></div><small>${names(v.s)}${v.loop?' ↻':''}</small><button class="b" data-ved="${i}">Изменить остановки</button></li>`).join('')
+  +'</ul><div class="row"><button id="vadd" class="b p">+ Новый вариант</button><button id="vx" class="b">Закрыть</button></div>';
+}
+dlg.addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b||!vr)return;
+  if(b.id==='vx')dlg.close();
+  else if(b.id==='vadd'||b.dataset.ved!==undefined){vm={R:vr,i:b.id==='vadd'?-1:+b.dataset.ved};vd=[];vloop=false;dlg.close();setTool('rvar')}
+  else if(b.dataset.vdel!==undefined){
+    const i=+b.dataset.vdel;City.push();vr.vars.splice(i,1);
+    (vr.buses||[]).forEach(x=>{const v=(x.v===undefined||x.v==='')?-1:+x.v;if(v===i)x.v='';else if(v>i)x.v=String(v-1)});
+    City.changed();vRender();
   }
-  function mk(f,pts){
-    const q=[];pts.forEach(p=>{const l=q[q.length-1];if(!l||dst(l,p)>.05)q.push(p)});
-    if(q.length<2)q.push([q[0][0]+.1,q[0][1]]);
-    const c=[0];for(let i=1;i<q.length;i++)c.push(c[i-1]+dst(q[i],q[i-1]));
-    f.path=q;f.cum=c;f.PL=c[c.length-1];f.d=0;
-  }
-  function at(f){
-    const c=f.cum,d=Math.max(0,Math.min(f.PL,f.d));let i=1;while(i<c.length-1&&c[i]<d)i++;
-    const a=f.path[i-1],b=f.path[i],l=(c[i]-c[i-1])||1,t=(d-c[i-1])/l;
-    return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,Math.atan2(b[1]-a[1],b[0]-a[0])];
-  }
-  const orient=(pts,dir)=>{const a=pts[0],b=pts[pts.length-1];return(b[0]-a[0])*dir[0]+(b[1]-a[1])*dir[1]<0?pts.slice().reverse():pts};
-  function arrive(f){
-    f.i=f.nx.i;f.dir=f.nx.dir;f.ph='park';f.t=5+Math.random()*4;f.alt=0;f.v=0;f.path=null;
-    if(f.st){f.x=f.st.x;f.y=f.st.y;f.ta=(+f.st.a||0)*Math.PI/180}
-  }
-  function depart(f){
-    const R=f.R,cur=aptOf(R.s[f.i]),nx=peek(f),dest=aptOf(R.s[nx.i]);
-    if(!cur||!dest||dest===cur){f.t=3;return}
-    f.nx=nx;f.dest=dest;
-    const rws=rwysOf(cur),cc=cen(cur),dc=cen(dest);
-    if(!rws.length){f.st=null;startFly(f);return}
-    f.roll=orient(rws[0].pts,[dc[0]-cc[0],dc[1]-cc[1]]);
-    if(f.st){
-      const sp=[f.st.x,f.st.y],tp=gpath(sp,f.roll[0]);
-      mk(f,[sp].concat(tp||[]).concat([f.roll[0]]));f.ph='taxiout';
-    }else{mk(f,f.roll);f.ph='roll';f.v=0}
-  }
-  function startFly(f){
-    const dest=f.dest,p0=[f.x,f.y],dc=cen(dest),rws=rwysOf(dest);
-    f.st=null;f.fp=p0;
-    if(rws.length){f.land=orient(rws[0].pts,[dc[0]-p0[0],dc[1]-p0[1]]);f.T=f.land[0]}else{f.land=null;f.T=dc}
-    f.FL=Math.max(1,dst(p0,f.T));f.d=0;f.ph='fly';f.v=Math.max(f.v,80);
-  }
-  function step(f,dt){
-    switch(f.ph){
-      case 'park':f.t-=dt;if(f.t<=0)depart(f);break;
-      case 'taxiout':f.d+=14*dt;if(f.d>=f.PL){mk(f,f.roll);f.ph='roll';f.v=0}break;
-      case 'roll':{
-        f.v+=22*dt;f.d+=f.v*dt;f.alt=Math.max(0,Math.min(.4,(f.v-60)/40));
-        if(f.v>=80||f.d>=f.PL){f.d=Math.min(f.d,f.PL);const a=at(f);f.x=a[0];f.y=a[1];startFly(f)}
-        break}
-      case 'fly':{
-        const rem=f.FL-f.d;f.v+=((rem<250?70:115)-f.v)*Math.min(1,dt);f.d+=f.v*dt;
-        f.alt=Math.max(0,Math.min(1,.4+f.d/150,rem/150));
-        if(f.d>=f.FL){
-          if(f.land){mk(f,f.land);f.ph='land';f.v=Math.max(f.v*.6,55);f.alt=0}
-          else{f.st=pickStand(f.dest,f);arrive(f)}
-        }
-        break}
-      case 'land':{
-        f.v=Math.max(12,f.v-16*dt);f.d+=f.v*dt;f.alt=0;
-        if(f.d>=f.PL){
-          const end=f.path[f.path.length-1],st=pickStand(f.dest,f);f.st=st;
-          if(st){const tp=gpath(end,[st.x,st.y]);mk(f,[end].concat(tp||[]).concat([[st.x,st.y]]));f.ph='taxiin'}
-          else arrive(f);
-        }
-        break}
-      case 'taxiin':f.d+=14*dt;if(f.d>=f.PL)arrive(f);break;
-    }
-    if(f.ph==='fly'){const t=Math.min(1,f.d/f.FL);f.x=f.fp[0]+(f.T[0]-f.fp[0])*t;f.y=f.fp[1]+(f.T[1]-f.fp[1])*t;f.ta=Math.atan2(f.T[1]-f.fp[1],f.T[0]-f.fp[0])}
-    else if(f.ph!=='park'&&f.path){const a=at(f);f.x=a[0];f.y=a[1];f.ta=a[2]}
-    if(f.an===undefined)f.an=f.ta;
-    let da=f.ta-f.an;da=Math.atan2(Math.sin(da),Math.cos(da));f.an+=da*Math.min(1,dt*(f.ph==='park'?2:5));
-  }
-  function syncF(){
-    const S=D();
-    fl=fl.filter(f=>S.aroutes.includes(f.R)&&(f.R.planes||[]).includes(f.pl)&&f.R.s.every(aptOf));
-    S.aroutes.forEach(R=>{
-      if(R.s.length<2||!R.s.every(aptOf))return;
-      (R.planes||[]).forEach((pl,k)=>{
-        if(fl.some(f=>f.pl===pl))return;
-        const a=aptOf(R.s[k%R.s.length]),f={pl,R,i:k%R.s.length,dir:1,ph:'park',t:Math.random()*8+k*3,alt:0,v:0};
-        f.st=pickStand(a,f);const c=f.st?[f.st.x,f.st.y]:cen(a);
-        f.x=c[0];f.y=c[1];f.ta=f.an=f.st?(+f.st.a||0)*Math.PI/180:0;fl.push(f);
-      });
-    });
-  }
-  function ensure(){
-    if(Sref!==City.S){Sref=City.S;fl=[];need=true;G=null}
-    if(need){syncF();need=false}
-  }
-
-  /* ---------- рисование ---------- */
-  const ln=(ctx,pts,w,c,dash)=>{ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.lineWidth=w;ctx.strokeStyle=c;ctx.setLineDash(dash||[]);ctx.stroke();ctx.setLineDash([])};
-  const rrect=(ctx,x,y,w,h,r)=>{ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,w,h,r)};
-  function drawPlane(ctx,L,sp,a,sh){
-    const W=L*.095,HS=sp/2,c=x=>sh?'#0000003d':x;
-    ctx.lineJoin='round';ctx.lineWidth=.6;ctx.strokeStyle='#0007';
-    const poly=(pts,fill)=>{ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.fillStyle=c(fill);ctx.fill();if(!sh)ctx.stroke()};
-    [1,-1].forEach(s=>{
-      poly([[.1*L,s*W*.4],[-.09*L,s*HS],[-.16*L,s*HS],[-.1*L,s*W*.4]],a.wing);
-      poly([[-.4*L,s*W*.3],[-.46*L,s*L*.16],[-.49*L,s*L*.16],[-.47*L,s*W*.3]],a.wing);
-      if(a.tip)poly([[-.1*L,s*HS],[-.14*L,s*(HS+W*.45)],[-.17*L,s*(HS+W*.45)],[-.16*L,s*HS]],a.tipc||a.tail);
-      rrect(ctx,.03*L,s*HS*.33-W*.25,.09*L,W*.5,W*.2);ctx.fillStyle=c(a.eng);ctx.fill();if(!sh)ctx.stroke();
-    });
-    const fus=()=>{ctx.beginPath();ctx.moveTo(.5*L,0);ctx.bezierCurveTo(.5*L,W*.35,.44*L,W/2,.36*L,W/2);ctx.lineTo(-.3*L,W/2);ctx.lineTo(-.5*L,W*.12);ctx.lineTo(-.5*L,-W*.12);ctx.lineTo(-.3*L,-W/2);ctx.lineTo(.36*L,-W/2);ctx.bezierCurveTo(.44*L,-W/2,.5*L,-W*.35,.5*L,0);ctx.closePath()};
-    fus();ctx.fillStyle=c(a.fus);ctx.fill();
-    if(a.rear&&!sh){ctx.save();fus();ctx.clip();ctx.fillStyle=a.rear;ctx.fillRect(-L,-W,L*.9,2*W);ctx.restore()}
-    fus();if(!sh)ctx.stroke();
-    if(!sh){ctx.fillStyle=a.tail;ctx.fillRect(-.5*L,-W*.07,.18*L,W*.14);ctx.fillStyle='#16222b';ctx.fillRect(.4*L,-W*.3,.03*L,W*.6)}
-  }
-
-  /* под дорогами: территория, рулёжки, полосы, стоянки */
-  City.layers.under.push((ctx,P)=>{
-    const S=D();
-    S.airports.forEach(a=>{
-      ctx.beginPath();a.pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
-      ctx.fillStyle='#8ea1ad30';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle='#5b6b77';ctx.setLineDash([12,8]);ctx.stroke();ctx.setLineDash([]);
-    });
-    S.airports.forEach(a=>{
-      if(!a.n)return;const c=cen(a);
-      ctx.font='800 24px Manrope,system-ui,sans-serif';if('letterSpacing' in ctx)ctx.letterSpacing='3px';ctx.textAlign='center';ctx.textBaseline='middle';
-      ctx.fillStyle='#5b6b77cc';ctx.fillText(a.n,c[0],c[1]);if('letterSpacing' in ctx)ctx.letterSpacing='0px';
-    });
-    S.taxis.forEach(R=>{const w=+R.w||14;ln(ctx,R.pts,w+3,'#2f373c');ln(ctx,R.pts,w,'#6b747a');ln(ctx,R.pts,1.4,'#e0b400',[10,8])});
-    S.rwys.forEach(R=>{
-      const w=+R.w||30;ln(ctx,R.pts,w+4,'#2b3338');ln(ctx,R.pts,w,'#4a5258');ln(ctx,R.pts,2,'#fff',[18,14]);
-      [[R.pts[0],R.pts[1]],[R.pts[R.pts.length-1],R.pts[R.pts.length-2]]].forEach(([e,n])=>{
-        const l=dst(e,n)||1,ux=(n[0]-e[0])/l,uy=(n[1]-e[1])/l,bx=e[0]+ux*8,by=e[1]+uy*8;
-        ctx.beginPath();ctx.moveTo(bx-uy*w*.36,by+ux*w*.36);ctx.lineTo(bx+uy*w*.36,by-ux*w*.36);ctx.lineWidth=3;ctx.strokeStyle='#fff';ctx.stroke();
-      });
-    });
-    S.stands.forEach(s=>{
-      ctx.save();ctx.translate(s.x,s.y);ctx.rotate((+s.a||0)*Math.PI/180);
-      rrect(ctx,-28,-23,56,46,6);ctx.lineWidth=1.5;ctx.strokeStyle='#e0b400';ctx.setLineDash([6,4]);ctx.stroke();ctx.setLineDash([]);
-      ctx.beginPath();ctx.moveTo(-22,0);ctx.lineTo(22,0);ctx.lineTo(15,-5);ctx.moveTo(22,0);ctx.lineTo(15,5);ctx.stroke();
-      ctx.restore();
-      if(City.view.k>.5&&s.n){ctx.font='700 10px Manrope,system-ui,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=P.lab;ctx.fillText(s.n,s.x,s.y+30)}
-    });
-  });
-
-  /* поверх: забор, маршруты, выделение, самолёты */
-  City.layers.over.push((ctx,P)=>{
-    ensure();ui();
-    const S=D(),k=City.view.k;
-    ctx.beginPath();
-    S.fences.forEach(F=>{
-      F.pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));
-      F.pts.slice(1).forEach((b,i)=>{const a=F.pts[i],l=dst(a,b),n=Math.floor(l/12);if(!l)return;const ux=(b[0]-a[0])/l,uy=(b[1]-a[1])/l;
-        for(let j=0;j<=n;j++){const x=a[0]+ux*j*12,y=a[1]+uy*j*12;ctx.moveTo(x-uy*4,y+ux*4);ctx.lineTo(x+uy*4,y-ux*4)}});
-    });
-    ctx.lineWidth=1.6;ctx.strokeStyle='#59636b';ctx.stroke();
-    S.aroutes.forEach(R=>{
-      const q=rpts(R);if(q.length<2)return;ln(ctx,q,2.5,R.c,[12,9]);
-      q.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],7,0,7);ctx.fillStyle=R.c;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=P.wh;ctx.stroke()});
-    });
-    const s=City.sel;
-    if(s&&['rwys','taxis','fences'].includes(s.k))ln(ctx,s.o.pts,(+s.o.w||6)+10,'#0c8a8670');
-    else if(s&&s.k==='aroutes')ln(ctx,rpts(s.o),10,'#0c8a8670');
-    else if(s&&s.k==='stands'){ctx.beginPath();ctx.arc(s.o.x,s.o.y,34,0,7);ctx.fillStyle='#0c8a8670';ctx.fill()}
-    else if(s&&s.k==='airports'){ctx.beginPath();s.o.pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.lineWidth=4;ctx.strokeStyle='#0c8a86';ctx.stroke()}
-    if(dr&&dr.t===City.tool){const q=dr.pts.concat([M]);ln(ctx,dr.t==='apt'?q.concat([dr.pts[0]]):q,2.5,'#0c8a86',[8,6])}
-    if(ar&&City.tool==='aroute')ln(ctx,ar.s.map(aptOf).filter(Boolean).map(cen).concat([M]),3,'#0c8a86',[8,6]);
-    fpos=[];
-    fl.slice().sort((a,b)=>a.alt-b.alt).forEach(f=>{
-      const m=PLANES[f.pl.m]||PLANES[MK[0]],sp=specOf(f.pl),L=m.l/mpu(),sc=1+(f.alt||0)*.22;
-      if(f.alt>.02){ctx.save();ctx.translate(f.x+f.alt*14,f.y+f.alt*20);ctx.rotate(f.an);ctx.scale(sc,sc);drawPlane(ctx,L,m.sp*L/m.l,sp,true);ctx.restore()}
-      ctx.save();ctx.translate(f.x,f.y);ctx.rotate(f.an);ctx.scale(sc,sc);drawPlane(ctx,L,m.sp*L/m.l,sp,false);ctx.restore();
-      fpos.push({x:f.x,y:f.y,r:Math.max(L/2,12),f});
-    });
-  });
-
-  /* окно с фото самолёта */
-  cv.addEventListener('pointerdown',e=>dn=[e.clientX,e.clientY]);
-  cv.addEventListener('pointerup',e=>{
-    if(!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
-    const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k,h=[...fpos].reverse().find(q=>Math.hypot(q.x-x,q.y-y)<q.r);
-    if(!h)return;
-    const pl=h.f.pl,sp=specOf(pl),name=pl.m+' ('+pl.al+')',seats=(PLANES[pl.m]||PLANES[MK[0]]).seats;
-   $('#pop').innerHTML=`<b>${E(name)}</b><div style="color:var(--mut)">${E(h.f.R.n)}</div>`+(sp.img?`<img src="${E(sp.img)}" alt="${E(name)}" onerror="this.outerHTML='<small>Нет файла ${E(sp.img)} рядом с index.html</small>'">`:'')+'<div class="row"><button id="pc3" class="b">Закрыть</button></div>';
-    $('#pop').hidden=false;$('#pc3').onclick=()=>$('#pop').hidden=true;
-  });
-  (function loop(){
-    const n=performance.now(),dt=Math.min(.1,(n-T0)/1000);T0=n;
-    ensure();fl.forEach(f=>step(f,dt));if(fl.length)City.redraw();
-    requestAnimationFrame(loop);
-  })();
+});
+dlg.addEventListener('change',e=>{const i=e.target.dataset.vn;if(i!==undefined&&vr&&vr.vars[+i]){City.push();vr.vars[+i].n=e.target.value;City.changed()}});
+dlg.addEventListener('close',()=>City.updateUI());
+function vdone(){
+  if(!vm)return;const R=vm.R,i=vm.i,ids=vd,lp=vloop;vm=null;vd=[];vloop=false;
+  if(ids.length>1){City.push();R.vars=R.vars||[];if(i>=0&&R.vars[i]){R.vars[i].s=ids;R.vars[i].loop=lp}else R.vars.push({n:'Вариант '+(R.vars.length+1),s:ids,loop:lp});City.changed()}
+  setTool('select');City.select('routes',R);City.updateUI();City.redraw();vr=R;vRender();dlg.showModal();
+}
+City.tools.rvar=(p,r)=>{
+  if(!vm)return;const k=City.view.k;let best=null;
+  City.S.stops.forEach(s=>{const d=Math.hypot(s.x-r[0],s.y-r[1]);if(d<20/k&&(!best||d<best.d))best={d,s}});
+  if(!best)return;const id=best.s.id;
+  if(vd.length>2&&id===vd[0]){vloop=true;vdone();return}
+  if(id!==vd[vd.length-1])vd.push(id);
+};
+$('#vok').onclick=vdone;
+$('#vno').onclick=()=>{const R=vm&&vm.R;vm=null;vd=[];setTool('select');if(R){City.select('routes',R);City.updateUI()}};
+$('#insp').addEventListener('click',e=>{
+  const s=City.sel,g=e.target.closest('[data-gs]');
+  if(g){const st=sb(+g.dataset.gs);if(st){City.select('stops',st);City.updateUI();City.redraw()}return}
+  const b=e.target.closest('button');
+  if(b&&b.dataset.vopen&&s&&s.k==='routes'){vr=s.o;vRender();dlg.showModal()}
+});
 })();
 </script>
 <script>
@@ -2690,6 +2579,23 @@ cv.addEventListener('pointerup',e=>{
     ensure();fl.forEach(f=>step(f,dt));if(fl.length)City.redraw();
     requestAnimationFrame(loop);
   })();
+})();
+</script>
+<!-- ===== БЛОК B: вставить в самый конец, перед </body> ===== -->
+<script>
+/* Плагин: карточка остановки с прибытием автобусов; часы — 1 игровая минута = 25 секунд */
+(function(){
+  const prev=City.insp.stops;
+  City.insp.stops=o=>prev(o)+'<div id="st-eta" style="display:flex;flex-direction:column;gap:4px">'+City.stopEta(o.id)+'</div>';
+  setInterval(()=>{const s=City.sel;if(!s||s.k!=='stops')return;const el=$('#st-eta');if(el)el.innerHTML=City.stopEta(s.o.id)},500);
+  const hd=$('#h-date');
+  if(hd){
+    Object.defineProperty(hd,'textContent',{set(){},get(){return ''},configurable:true});
+    setInterval(()=>{
+      const d=new Date(Date.UTC(2025,0,1)+City.gm()*60000),p=n=>String(n).padStart(2,'0');
+      hd.innerHTML=d.toLocaleDateString('ru-RU',{timeZone:'UTC',day:'numeric',month:'long',year:'numeric'}).replace(' г.','')+', '+p(d.getUTCHours())+':'+p(d.getUTCMinutes());
+    },200);
+  }
 })();
 </script>
 </body>
