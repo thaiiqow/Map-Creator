@@ -2802,5 +2802,264 @@ function rr(ctx,x,y,w,h){ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,
 City.redraw();
 })();
 </script>
+<!-- ===== Плагин: страны, армии и войны, 3D, достопримечательности, парки, службы.
+     Вставить В САМЫЙ КОНЕЦ, перед </body>. Рядом с index.html положить sved.png (фото ТРК «Сведенский»). ===== -->
+<script>
+(function(){
+const D=()=>City.S,E=City.esc,F='Manrope,system-ui,sans-serif',R=260;
+const mpu=()=>((D().scale||50)/50);
+const arr=k=>D()[k]||(D()[k]=[]);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const cen=a=>[a.reduce((s,p)=>s+p[0],0)/a.length,a.reduce((s,p)=>s+p[1],0)/a.length];
+const area=a=>Math.abs(a.reduce((s,p,i)=>{const q=a[(i+1)%a.length];return s+p[0]*q[1]-q[0]*p[1]},0))/2;
+const n0=v=>Math.round(v).toLocaleString('ru-RU');
+const km2=a=>area(a)*mpu()*mpu()/1e6;
+const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+const CC=['#7a5cd6','#d9534f','#2a9d8f','#e9a400','#2e86ab','#c2185b'];
+const cs=()=>arr('countries'),wars=()=>arr('wars'),cb=id=>cs().find(c=>c.id===id);
+let M=[0,0],cd=null,d3=false;
+cv.addEventListener('pointermove',e=>{const V=City.view;M=[(e.offsetX-V.x)/V.k,(e.offsetY-V.y)/V.k]});
+
+/* ---------- интерфейс ---------- */
+document.head.insertAdjacentHTML('beforeend','<style>#gp{margin:0 6px 14px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--bg);font-size:13px}#gp b{display:block;margin:8px 0 2px}#gp b:first-child{margin-top:0}#gp .gl{display:flex;gap:6px;align-items:center;padding:3px 0;cursor:pointer}#gp .gl i{width:10px;height:10px;border-radius:50%;flex:none}#gp .gl span,#gp .gm{color:var(--mut)}#gp .gl span{margin-left:auto}</style>');
+($('#hud')||$('#cname')).insertAdjacentHTML('afterend','<div id="gp"></div>');
+$('#wrap').insertAdjacentHTML('beforeend','<div id="cb" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:112px;padding:8px 14px;display:flex;gap:8px;align-items:center"><span id="cbn"></span><button id="cbok" class="b p">Готово</button><button id="cbno" class="b">Отмена</button></div>');
+$('#p2').insertAdjacentHTML('beforeend','<button id="d3" class="b">3D</button>');
+$('#d3').onclick=e=>{d3=!d3;e.currentTarget.classList.toggle('on',d3);City.redraw()};
+
+/* ---------- страны ---------- */
+const own=p=>{for(const c of cs())if((c.parts||[]).some(q=>inPoly(p,q)))return c;return cs().find(c=>inPoly(p,c.pts))};
+function info(c){
+  const S=D(),ds=(S.dists||[]).filter(d=>own(cen(d.pts))===c),bs=(S.bounds||[]).filter(b=>own(cen(b.pts))===c),used=new Set();
+  const cities=bs.map(b=>{const dd=ds.filter(d=>inPoly(cen(d.pts),b.pts));dd.forEach(d=>used.add(d));return{n:b.n,ds:dd,pop:dd.reduce((s,d)=>s+(d.pop||0),0)}});
+  return{ds,cities,free:ds.filter(d=>!used.has(d)),pop:Math.max(0,ds.reduce((s,d)=>s+(d.pop||0),0)-(c.loss||0)),km:Math.max(0,km2(c.pts)+(c.parts||[]).reduce((s,q)=>s+km2(q),0)-(c.lostA||0))};
+}
+const armyOf=c=>(c.army===undefined||c.army==='')?Math.max(100,Math.round(info(c).pop*.01)):Math.max(0,Math.round(+c.army));
+function endC(){
+  const a=cd;cd=null;
+  if(a&&a.length>2){const n=cs().length;City.add('countries',{id:D().id++,pts:a,n:'Страна '+(n+1),c:CC[n%6],war:'0'})}
+  City.redraw();
+}
+$('#cbok').onclick=endC;$('#cbno').onclick=()=>{cd=null;City.redraw()};
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||City.tool!=='country')return;if(e.key==='Enter')endC();if(e.key==='Escape'){cd=null;City.redraw()}});
+const cIns=o=>{
+  const I=info(o),w=wars().filter(x=>x.a===o.id||x.b===o.id);
+  return `<label>Цвет<input type="color" data-f="c" value="${E(o.c)}" style="height:34px;padding:2px"></label>`
+  +`<label>Участие в войнах<select data-f="war"><option value="0" ${o.war==='1'?'':'selected'}>Не воюет</option><option value="1" ${o.war==='1'?'selected':''}>Может воевать</option></select></label>`
+  +`<label>Армия, чел.<input type="number" min="0" data-f="army" placeholder="авто (${n0(armyOf(o))})" value="${o.army===undefined?'':E(o.army)}"></label>`
+  +`<div style="font-size:13px;color:var(--mut)">Население: <b style="color:var(--ink)">${n0(I.pop)}</b> чел.<br>Площадь: <b style="color:var(--ink)">${I.km.toFixed(2).replace('.',',')} км²</b><br>Городов: <b style="color:var(--ink)">${I.cities.length}</b>, районов: <b style="color:var(--ink)">${I.ds.length}</b></div>`
+  +(I.cities.length?'<div style="font-size:13px"><b>Города</b>'+I.cities.map(c=>`<div style="color:var(--mut)">${E(c.n)} — ${n0(c.pop)} чел., районов: ${c.ds.length}</div>`).join('')+'</div>':'')
+  +(I.free.length?'<div style="font-size:13px;color:var(--mut)">Районы вне городов: '+I.free.map(d=>E(d.n)).join(', ')+'</div>':'')
+  +(w.length?'<div style="font-size:13px;color:var(--red)"><b>Идут войны: '+w.length+'</b></div>':'')
+  +'<button class="b" data-cw="war">Объявить войну…</button><button class="b" data-cw="civ">Гражданская война</button>';
+};
+City.register({key:'countries',label:'Страна',group:'Районы',leaf:'Страна',color:'#7a5cd6',tool:'country',
+  hint:'Обведите страну точками. Первая точка, двойной клик или «Готово» — закончить. Выбрать страну — нажать на её границу или на список слева.',
+  click(p){const k=City.view.k;if(!cd){cd=[p];return}const l=cd[cd.length-1],f=cd[0];if(dst(l,p)<6/k||(cd.length>2&&dst(f,p)<14/k))endC();else cd.push(p)},
+  hit:(p,r)=>cs().find(c=>c.pts.some((q,i)=>dseg(p,q,c.pts[(i+1)%c.pts.length])<r+3)),
+  inspector:cIns});
+City.register({key:'wars',label:'Война'});
+
+/* ---------- войны ---------- */
+const log=[];
+function startWar(a,b,civil){
+  if(civil?wars().some(w=>w.civil&&w.a===a.id):wars().some(w=>!w.civil&&((w.a===a.id&&w.b===b.id)||(w.a===b.id&&w.b===a.id))))return false;
+  const A=armyOf(a);a.army=A;let fa,fb;
+  if(civil){fa=Math.round(A*.55);fb=A-fa}else{const B=armyOf(b);b.army=B;fa=Math.round(A*.6);fb=Math.round(B*.6)}
+  wars().push({id:D().id++,a:a.id,b:civil?a.id:b.id,civil,fa,fb});
+  log.unshift(civil?'Гражданская война в «'+a.n+'»':'«'+a.n+'» воюет с «'+b.n+'»');
+  City.changed();return true;
+}
+function endWar(w,msg){D().wars=wars().filter(x=>x!==w);if(msg)log.unshift(msg);City.changed();if(City.sel)City.updateUI()}
+$('#insp').addEventListener('click',e=>{
+  const b=e.target.closest('[data-cw]'),s=City.sel;if(!b||!s||s.k!=='countries')return;const o=s.o;
+  if(b.dataset.cw==='civ'){if(!startWar(o,o,true))alert('Гражданская война уже идёт.')}
+  else{
+    const L=cs().filter(c=>c!==o);if(!L.length){alert('Нужна ещё хотя бы одна страна.');return}
+    const t=prompt('Против кого? Номера через запятую (можно несколько):\n'+L.map((c,i)=>(i+1)+' — '+c.n+(c.war==='1'?'':' (не воюет)')).join('\n'));if(!t)return;
+    const bad=[];t.split(/[,;\s]+/).forEach(x=>{const c=L[+x-1];if(!c)return;if(c.war!=='1'){bad.push(c.n);return}startWar(o,c,false)});
+    if(bad.length)alert('Напасть нельзя — у страны выключена настройка «Воюет»: '+bad.join(', '));
+  }
+  City.updateUI();
+});
+/* захват территории: победитель забирает ~35% страны проигравшего со своей стороны */
+function clip(P,d,t0){const out=[];for(let i=0;i<P.length;i++){const a=P[i],b=P[(i+1)%P.length],fa=a[0]*d[0]+a[1]*d[1]-t0,fb=b[0]*d[0]+b[1]*d[1]-t0;if(fa>=0)out.push(a);if((fa>=0)!==(fb>=0)){const t=fa/(fa-fb);out.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t])}}return out}
+function annex(W,L){
+  const a=cen(W.pts),b=cen(L.pts);let d=[a[0]-b[0],a[1]-b[1]];const l=Math.hypot(d[0],d[1])||1;d=[d[0]/l,d[1]/l];
+  const ts=L.pts.map(p=>p[0]*d[0]+p[1]*d[1]),mx=Math.max(...ts),mn=Math.min(...ts),q=clip(L.pts,d,mx-.35*(mx-mn));
+  if(q.length<3)return;
+  (W.parts=W.parts||[]).push(q);L.lostA=(L.lostA||0)+km2(q);
+  log.unshift('«'+W.n+'» присоединила часть территории «'+L.n+'»');
+}
+let lastDay=null,acc=0,tk=0;
+function warTick(){
+  const day=City.game?City.game.day:0;if(lastDay===null)lastDay=day;const dd=Math.max(0,day-lastDay);lastDay=day;if(!dd)return;
+  wars().slice().forEach(w=>{
+    const A=cb(w.a),B=cb(w.b);if(!A||!B){endWar(w);return}
+    const la=Math.min(w.fa,w.fb*.1*dd*(.6+Math.random()*.8)),lb=Math.min(w.fb,w.fa*.1*dd*(.6+Math.random()*.8));
+    w.fa-=la;w.fb-=lb;
+    if(w.civil){A.army=Math.max(0,(+A.army||0)-la-lb);A.loss=(A.loss||0)+(la+lb)*.25}
+    else{A.army=Math.max(0,(+A.army||0)-la);B.army=Math.max(0,(+B.army||0)-lb);A.loss=(A.loss||0)+la*.12;B.loss=(B.loss||0)+lb*.12+la*.12}
+    if(w.fa<1||w.fb<1){
+      if(w.civil)endWar(w,'Гражданская война в «'+A.n+'» окончена: победили '+(w.fa>=w.fb?'правительственные силы':'повстанцы'));
+      else{const aw=w.fa>=w.fb;annex(aw?A:B,aw?B:A);endWar(w,'Война окончена: победила «'+(aw?A.n:B.n)+'»')}
+    }
+  });
+  acc+=dd;
+  if(acc>=4){acc=0;
+    const live=cs().filter(c=>c.war==='1');
+    if(live.length>1&&Math.random()<.4){const a=live[Math.floor(Math.random()*live.length)],o=live.filter(c=>c!==a);startWar(a,o[Math.floor(Math.random()*o.length)],false)}
+    else if(cs().length&&Math.random()<.12)startWar(cs()[Math.floor(Math.random()*cs().length)],null,true);
+  }
+  if(++tk%10===0)save();
+}
+
+/* ---------- достопримечательности, парки ---------- */
+const LMS={sved:{h:150,w:58,d:40,img:'sved.png',fl:'70+',desc:'ТРК «Сведенский» — масштабный торгово-развлекательный комплекс, расположенный на морском побережье в районе Central Lanđai. Представляет собой футуристичный стеклянный небоскрёб высотой более 70 этажей, сочетающий торговые пространства, развлекательную инфраструктуру, рестораны и общественные зоны.'}};
+City.register({key:'lms',label:'Достопримечательность',group:'Достопримечательности',leaf:'ТРК Сведенский',color:'#3b7ddd',tool:'lm',
+  hint:'Нажмите на карту, чтобы поставить достопримечательность.',
+  click:p=>City.add('lms',{x:p[0],y:p[1],t:'sved',n:'ТРК «Сведенский»'}),
+  hit:(p,r)=>arr('lms').find(l=>Math.abs(l.x-p[0])<(LMS[l.t].w/2+r)&&Math.abs(l.y-p[1])<(LMS[l.t].d/2+r)),
+  inspector:o=>{const m=LMS[o.t]||LMS.sved;return `<div style="font-size:13px;color:var(--mut)">Этажей: <b style="color:var(--ink)">${m.fl}</b><br>${E(m.desc)}</div><img src="${E(m.img)}" alt="" style="width:100%;border-radius:8px" onerror="this.outerHTML='<small>Нет файла ${E(m.img)} рядом с index.html</small>'">`}});
+City.addLeaf('Парки',['Парк','bld','park','#a8d89a']);
+
+/* ---------- службы и потребности ---------- */
+const SV={fire:['Пожарная часть','🚒','#e4572e',1],police:['Полиция','🚓','#2e5aa8',1],amb:['Скорая помощь','🚑','#d7263d',1],garbage:['Вывоз мусора','🗑️','#6b7a3c',0],morgue:['Вывоз тел','⚰️','#59636b',0],gas:['Газовая служба','🔥','#e9a400',0]};
+Object.keys(SV).forEach(t=>City.addLeaf(SV[t][3]?'Экстренные службы':'Потребностные службы',[SV[t][0],'svc',t,SV[t][2]]));
+const hw=b=>b.t!=='house'?0:(b.pop===undefined||b.pop===''?Math.max(1,Math.round(b.w*b.h*mpu()*mpu()/25)):Math.max(0,+b.pop||0));
+const houses=()=>D().blds.filter(b=>b.t==='house').map(b=>({x:b.x+b.w/2,y:b.y+b.h/2,w:hw(b)}));
+const has=(x,y,t)=>arr('svc').some(s=>s.t===t&&Math.hypot(s.x-x,s.y-y)<R);
+function cover(){const hs=houses(),W=hs.reduce((s,h)=>s+h.w,0),r={};Object.keys(SV).forEach(t=>{r[t]=W?hs.reduce((s,h)=>s+(has(h.x,h.y,t)?h.w:0),0)/W:null});return{hs,r}}
+City.register({key:'svc',label:'Служба',tool:'svc',hint:'Нажмите на карту, чтобы поставить службу. Радиус обслуживания виден при выборе.',
+  click(p){if(!SV[tt])return;City.add('svc',{x:p[0],y:p[1],t:tt,n:SV[tt][0]+' '+(arr('svc').filter(s=>s.t===tt).length+1)})},
+  hit:(p,r)=>arr('svc').find(s=>dst([s.x,s.y],p)<r+12),
+  inspector:o=>{const hs=houses().filter(h=>dst([h.x,h.y],[o.x,o.y])<R);return `<div style="font-size:13px;color:var(--mut)">${SV[o.t][3]?'Экстренная служба':'Коммунальная служба'}<br>Радиус: <b style="color:var(--ink)">${n0(R*mpu())} м</b><br>Охват жителей: <b style="color:var(--ink)">${n0(hs.reduce((s,h)=>s+h.w,0))}</b></div>`}});
+const INC=[];let ok=0,fail=0;
+function incTick(){
+  const sp=City.game?City.game.speed:1;if(!sp)return;
+  INC.slice().forEach(i=>{i.age+=.5*sp;
+    if(i.age>6&&has(i.x,i.y,i.t)){INC.splice(INC.indexOf(i),1);ok++}
+    else if(i.age>45){INC.splice(INC.indexOf(i),1);fail++}});
+  if(INC.length<8&&Math.random()<.06*sp){const hs=houses();if(hs.length){const h=hs[Math.floor(Math.random()*hs.length)],ts=['fire','police','amb','gas'];INC.push({x:h.x,y:h.y,t:ts[Math.floor(Math.random()*4)],age:0})}}
+}
+
+/* ---------- панель слева ---------- */
+let gpH='';
+function gp(){
+  const el=$('#gp');if(!el)return;
+  let h='<b>Страны</b>'+(cs().map(c=>`<div class="gl" data-c="${c.id}"><i style="background:${E(c.c)}"></i>${E(c.n)} <span>${n0(info(c).pop)}</span></div>`).join('')||'<div class="gm">Нет стран</div>');
+  h+='<b>Войны</b>'+(wars().map(w=>{const A=cb(w.a),B=cb(w.b);return A&&B?`<div class="gl" style="cursor:default">⚔ ${E(A.n)}${w.civil?' (гражданская)':' — '+E(B.n)}<span>${n0(w.fa)} : ${n0(w.fb)}</span></div>`:''}).join('')||'<div class="gm">Мир</div>');
+  h+=log.slice(0,3).map(t=>`<div class="gm">${E(t)}</div>`).join('');
+  const c=cover();h+='<b>Потребности жителей</b>';
+  h+=c.hs.length?Object.keys(SV).map(t=>{const v=Math.round(c.r[t]*100);return `<div class="gl" style="cursor:default"><i style="background:${SV[t][2]}"></i>${SV[t][0]}<span style="color:${v<60?'var(--red)':'var(--mut)'}">${v}%</span></div>`}).join('')+`<div class="gm">Вызовов: решено ${ok}, провалено ${fail}, активно ${INC.length}</div><div class="gm">Переполнено: мусор — ${od.garbage} дом., тела — ${od.morgue} дом.</div>`:'<div class="gm">Нет жилых домов</div>';
+  if(h!==gpH){gpH=h;el.innerHTML=h}
+}
+$('#gp').addEventListener('click',e=>{const g=e.target.closest('[data-c]');if(!g)return;const c=cb(+g.dataset.c);if(c){City.select('countries',c);City.updateUI();City.redraw()}});
+setInterval(()=>{try{warTick();incTick();gp()}catch(x){console.error(x)}},500);
+
+/* ---------- 3D (выдавливание зданий) ---------- */
+const HT={house:14,shop:18,office:60,industry:26,terminal:30,hangar:20,tower:70};
+const rp=b=>b.pts||[[b.x,b.y],[b.x+b.w,b.y],[b.x+b.w,b.y+b.h],[b.x,b.y+b.h]];
+function ext(ctx,pts,h,fill){
+  const up=p=>[p[0],p[1]-h];
+  poly(pts.map(p=>[p[0]+h*.5,p[1]+h*.2]));ctx.fillStyle='#00000030';ctx.fill();
+  ctx.lineWidth=.8;ctx.strokeStyle='#00000066';
+  pts.forEach((a,i)=>{const b=pts[(i+1)%pts.length];ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.lineTo(b[0],b[1]-h);ctx.lineTo(a[0],a[1]-h);ctx.closePath();ctx.fillStyle=fill;ctx.fill();ctx.fillStyle='#00000055';ctx.fill();ctx.stroke()});
+  poly(pts.map(up));ctx.fillStyle=fill;ctx.fill();ctx.stroke();
+}
+function d3draw(ctx,P){
+  const list=[];
+  D().blds.forEach(b=>{if(b.t==='park'||b.t==='water')return;const p=rp(b);list.push({p,h:HT[b.t]||20,f:(BLD[b.t]||BLD.house)[1],y:Math.max(...p.map(q=>q[1]))})});
+  arr('lms').forEach(l=>{const m=LMS[l.t]||LMS.sved,p=[[l.x-m.w/2,l.y-m.d/2],[l.x+m.w/2,l.y-m.d/2],[l.x+m.w/2,l.y+m.d/2],[l.x-m.w/2,l.y+m.d/2]];list.push({p,h:m.h,f:'#5f93d6',y:l.y+m.d/2,l})});
+  list.sort((a,b)=>a.y-b.y).forEach(o=>{
+    ext(ctx,o.p,o.h,o.f);
+    if(o.l){const x=o.l.x,y=o.l.y-o.h;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x,y-45);ctx.lineWidth=2;ctx.strokeStyle='#dfe8f2';ctx.stroke();
+      ctx.font='800 11px '+F;ctx.textAlign='center';ctx.textBaseline='middle';ctx.lineWidth=3.5;ctx.strokeStyle=P.bg;ctx.strokeText(o.l.n,x,y-56);ctx.fillStyle=P.ink;ctx.fillText(o.l.n,x,y-56)}
+  });
+}
+
+/* ---------- рисование ---------- */
+City.layers.under.push((ctx,P)=>{
+  cs().forEach(c=>{
+    const atw=wars().some(w=>w.a===c.id||w.b===c.id);
+    poly(c.pts);ctx.fillStyle=c.c+'1c';ctx.fill();ctx.lineWidth=3.5;ctx.strokeStyle=atw?'#d7263d':c.c;ctx.setLineDash([18,8]);ctx.stroke();ctx.setLineDash([]);
+    const m=cen(c.pts),fs=clamp(Math.sqrt(area(c.pts))*.07,22,140);
+    ctx.font='800 '+fs+'px '+F;if('letterSpacing' in ctx)ctx.letterSpacing=(fs*.12)+'px';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle=c.c+'aa';ctx.fillText(c.n.toUpperCase(),m[0],m[1]-fs*1.2);if('letterSpacing' in ctx)ctx.letterSpacing='0px';
+  });
+});
+City.layers.over.push((ctx,P)=>{
+  const k=City.view.k,u=1/k,sc=Math.max(1,.55/k),S=D();
+  if(City.tool!=='country')cd=null;
+  $('#cb').hidden=!cd;if(cd)$('#cbn').textContent='Точек: '+cd.length;
+  if(cd)line(cd.concat([M,cd[0]]),2.5,'#7a5cd6',[8,6]);
+  const sel=City.sel;
+  if(sel&&sel.k==='countries'){poly(sel.o.pts);ctx.lineWidth=5*u;ctx.strokeStyle='#0c8a8670';ctx.stroke()}
+  if(d3)d3draw(ctx,P);
+  else arr('lms').forEach(l=>{const m=LMS[l.t]||LMS.sved;rr(ctx,l.x-m.w/2,l.y-m.d/2,m.w,m.d);ctx.fillStyle='#6fa0e0';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();ctx.font='800 11px '+F;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#fff';ctx.fillText('★',l.x,l.y);
+    if(k>.4){ctx.lineWidth=3.5;ctx.strokeStyle=P.bg;ctx.strokeText(l.n,l.x,l.y+m.d/2+12);ctx.fillStyle=P.ink;ctx.fillText(l.n,l.x,l.y+m.d/2+12)}});
+  if(sel&&sel.k==='lms'){const l=sel.o,m=LMS[l.t]||LMS.sved;ctx.strokeStyle='#0c8a86';ctx.lineWidth=4*u;ctx.strokeRect(l.x-m.w/2-4,l.y-m.d/2-4,m.w+8,m.d+8)}
+  arr('svc').forEach(s=>{
+    const on=sel&&sel.o===s;
+    if(on){ctx.beginPath();ctx.arc(s.x,s.y,R,0,7);ctx.lineWidth=2*u;ctx.strokeStyle=SV[s.t][2];ctx.setLineDash([8*u,6*u]);ctx.stroke();ctx.setLineDash([])}
+    ctx.save();ctx.translate(s.x,s.y);ctx.scale(sc,sc);ctx.beginPath();ctx.arc(0,0,11,0,7);ctx.fillStyle=SV[s.t][2];ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=on?'#0c8a86':'#fff';ctx.stroke();
+    ctx.font='12px '+F;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(SV[s.t][1],0,1);ctx.restore();
+  });
+  INC.forEach(i=>{const p=1+Math.sin(i.age*6)*.15;ctx.save();ctx.translate(i.x,i.y);ctx.scale(sc*p,sc*p);ctx.beginPath();ctx.arc(0,0,12,0,7);ctx.fillStyle='#fff';ctx.fill();ctx.lineWidth=2.5;ctx.strokeStyle='#d7263d';ctx.stroke();ctx.font='13px '+F;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(SV[i.t][1],0,1);ctx.restore()});
+  wars().forEach(w=>{
+    const A=cb(w.a),B=cb(w.b);if(!A||!B)return;const a=cen(A.pts),b=cen(B.pts);
+    const t='⚔ '+n0(w.fa)+' : '+n0(w.fb),x=w.civil?a[0]:(a[0]+b[0])/2,y=w.civil?a[1]:(a[1]+b[1])/2;
+    if(!w.civil)line([a,b],4*u,'#d7263d',[14*u,10*u]);
+    ctx.font='800 '+(14*u)+'px '+F;ctx.textAlign='center';ctx.textBaseline='middle';ctx.lineWidth=4*u;ctx.strokeStyle=P.bg;ctx.strokeText(t,x,y);ctx.fillStyle='#d7263d';ctx.fillText(t,x,y);
+  });
+});
+function rr(ctx,x,y,w,h){ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,w,h,6)}
+/* ---------- присоединённые территории ---------- */
+City.layers.under.push(ctx=>{cs().forEach(c=>(c.parts||[]).forEach(q=>{poly(q);ctx.fillStyle=c.c+'33';ctx.fill();ctx.lineWidth=3.5;ctx.strokeStyle=c.c;ctx.setLineDash([18,8]);ctx.stroke();ctx.setLineDash([])}))});
+
+/* ---------- мусор и тела: копятся у домов вне зоны службы ---------- */
+const TH={garbage:100,morgue:10},od={garbage:0,morgue:0};let ld=null;
+setInterval(()=>{
+  const day=City.game?City.game.day:0;if(ld===null)ld=day;const dd=Math.max(0,day-ld);ld=day;od.garbage=od.morgue=0;
+  D().blds.forEach(b=>{if(b.t!=='house')return;const n=b.nd||(b.nd={garbage:0,morgue:0}),x=b.x+b.w/2,y=b.y+b.h/2,k=1+hw(b)/100;
+    ['garbage','morgue'].forEach(t=>{if(dd)n[t]=has(x,y,t)?Math.max(0,n[t]-80*dd):Math.min(t==='garbage'?300:60,n[t]+(t==='garbage'?25:4)*k*dd);if(n[t]>TH[t])od[t]++})});
+},500);
+City.layers.over.push(ctx=>{
+  const sc=Math.max(1,.55/City.view.k);ctx.font=(11*sc)+'px '+F;ctx.textAlign='center';ctx.textBaseline='middle';
+  D().blds.forEach(b=>{const n=b.nd;if(!n)return;let i=0;['garbage','morgue'].forEach(t=>{if(n[t]>TH[t]){ctx.fillText(SV[t][1],b.x+b.w/2+(i?10:-10)*sc,b.y-6*sc);i++}})});
+});
+
+/* ---------- слежение за поездами и метро ---------- */
+const origPush=Array.prototype.push;let vt=[],tf=null,dn3=null,miss=0;
+Array.prototype.push=function(){const o=arguments[0];if(arguments.length===1&&o&&typeof o==='object'&&Array.isArray(o.cs)&&o.R&&o.R.sys&&o.m&&o.r)origPush.call(vt,o);return origPush.apply(this,arguments)};
+City.layers.under.push(()=>{vt=[]});
+const trPos=f=>{let i=0;for(const o of vt)if(o.R===f.R){if(i===f.i)return o.cs[o.cs.length>>1];i++}return null};
+function startTF(f){
+  $('#fol-x').click();tf=f;miss=0;if(City.view.k<1.2)City.view.k=1.2;
+  $('#fol').hidden=false;$('#fol-n').textContent=f.name;
+}
+$('#fol-x').addEventListener('click',()=>{tf=null});
+cv.addEventListener('pointerdown',e=>{dn3=[e.clientX,e.clientY]});
+cv.addEventListener('pointerup',e=>{
+  if(!dn3||City.tool!=='select'||Math.hypot(e.clientX-dn3[0],e.clientY-dn3[1])>5)return;
+  const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k,cnt=new Map();
+  for(const o of vt){const i=cnt.get(o.R)||0;cnt.set(o.R,i+1);
+    if(o.cs.some(c=>Math.hypot(c[0]-x,c[1]-y)<o.r)){
+      const f={R:o.R,i,name:o.m.n+' · '+o.R.n},row=$('#pop .row');
+      if(row&&!$('#pop .eye2')){const b=document.createElement('button');b.className='b eye2';b.textContent='👁 Следить';row.prepend(b);b.onclick=()=>startTF(f)}
+      break}}
+});
+(function lp(){
+  if(tf){
+    if(City.follow())tf=null;
+    else{const p=trPos(tf);
+      if(pan&&pan.m){tf=null;$('#fol').hidden=true}
+      else if(!p){if(++miss>40){tf=null;$('#fol').hidden=true}}
+      else{miss=0;const r=cv.getBoundingClientRect(),V=City.view;V.x+=(r.width/2-V.k*p[0]-V.x)*.4;V.y+=(r.height/2-V.k*p[1]-V.y)*.4;City.redraw()}}
+  }
+  requestAnimationFrame(lp);
+})();
+City.redraw();
+})();
+</script>
 </body>
 </html>
