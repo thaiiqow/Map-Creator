@@ -1095,7 +1095,7 @@ function step(en,dt,all){
     tv=Math.min(tv,vmax*Math.min(1,(dd-sd)/24));lim=Math.min(lim,Math.max(0,dd-sd))}
   /* автобус впереди */
   const ca=Math.cos(st.an),sa=Math.sin(st.an);
-  all.forEach(o=>{if(o===st||!o.run)return;const dx=o.x-st.x,dy=o.y-st.y,f=ca*dx+sa*dy,la=Math.abs(-sa*dx+ca*dy);
+  all.forEach(o=>{if(o===st||!o.run||(o.park&&!((o.due||0)>0)))return;const dx=o.x-st.x,dy=o.y-st.y,f=ca*dx+sa*dy,la=Math.abs(-sa*dx+ca*dy);
     if(f>0&&f<L*3&&la<W*1.1&&Math.cos(o.an-st.an)>.3){const gap=f-L;tv=Math.min(tv,vmax*Math.max(0,gap/(L*2)));lim=Math.min(lim,Math.max(0,gap-1))}});
   st.v+=(tv-st.v)*Math.min(1,dt*2.5);
   st.d=Math.min(tr.L,st.d+Math.min(lim,Math.max(0,st.v)*dt));
@@ -1117,7 +1117,20 @@ let ents=[],hit=[];
         const c=sc.filter(t=>t0<=t1?(t>t0&&t<=t1):(t>t0||t<=t1)).length;
         if(c)st.due=Math.min(3,(st.due||0)+c);
       }
-    }else if(st.park||!st.run)start(st,T,0,T.F.L*((en.i+.5)/en.n));
+        }else if(st.park||!st.run)start(st,T,0,T.F.L*((en.i+.5)/en.n));
+  });
+  /* ожидающие выезда автобусы съезжают вправо, чтобы освободить остановку */
+  const slots={};
+  ents.forEach(en=>{
+    const st=en.st;if(!st||!st.run||!en.e)return;
+    let tx=0,ty=0;
+    if(st.park&&!((st.due||0)>0)){
+      const key=en.e.s[0],slot=slots[key]=(slots[key]===undefined?0:slots[key]+1);
+      const Lb=Math.max(((City.busKit.MODELS[en.b.m]||{l:12}).l)/mpu(),22),a=st.an||0,SIDE=10,back=slot*(Lb+2);
+      tx=-Math.sin(a)*SIDE-Math.cos(a)*back;ty=Math.cos(a)*SIDE-Math.sin(a)*back;
+    }
+    const k=Math.min(1,dt*3);
+    st.ox=(st.ox||0)+(tx-(st.ox||0))*k;st.oy=(st.oy||0)+(ty-(st.oy||0))*k;
   });
   if(ents.length){
     if($('#bs').classList.contains('on')){const all=ents.map(e=>e.st);ents.forEach(en=>{if(en.st.run)step(en,dt,all)})}
@@ -1162,8 +1175,9 @@ City.layers.over.push((ctx,P)=>{
   hit=[];const K=City.busKit;
   ents.forEach(en=>{
     const st=en.st;if(!st||!st.run)return;const m=K.MODELS[en.b.m]||{l:12};
-    K.drawBus(ctx,{x:st.x,y:st.y,an:st.an||0},m.l,en.b.c,m.top);
-    const o={x:st.x,y:st.y,L:Math.max(m.l/mpu(),22),b:en.b,R:en.e};
+        const dx=st.ox||0,dy=st.oy||0;
+    K.drawBus(ctx,{x:st.x+dx,y:st.y+dy,an:st.an||0},m.l,en.b.c,m.top);
+    const o={x:st.x+dx,y:st.y+dy,L:Math.max(m.l/mpu(),22),b:en.b,R:en.e};
     hit[hit.length]=o;[].push(o);
         if(st.park&&st.late){const z=sb(en.e.s[0]);if(z){
       const sc=Math.max(1,.55/City.view.k);
