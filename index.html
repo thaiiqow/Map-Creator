@@ -1059,17 +1059,28 @@ function place(st,dt){
 }
 function start(st,T,leg,d){
   const tr=leg?T.B:T.F;if(!tr){st.run=false;return}
-  st.tr=tr;st.leg=leg;st.d=d;st.v=0;st.dw=0;st.fin=false;
+  st.tr=tr;st.leg=leg;st.d=d;st.v=0;st.dw=0;st.fin=false;st.park=false;st.late=false;
   st.si=tr.stops.findIndex(s=>s.s>d+.5);if(st.si<0)st.si=tr.stops.length-1;
   st.run=true;place(st,0);
 }
-function endTrip(st,T){
-  if(T.e.loop){if(st.sch)st.run=false;else start(st,T,0,0);return}
-  if(st.leg===0&&T.B){start(st,T,1,0);return}
-  if(st.sch)st.run=false;else start(st,T,0,0);
+function parkAt(st,T){
+  st.tr=T.F;st.leg=0;st.d=0;st.v=0;st.dw=0;st.fin=false;st.si=1;
+  st.run=true;st.park=true;st.late=(st.due||0)>0;place(st,0);
 }
+function endTrip(st,T){
+  if(T.e.loop){if(st.sch)parkAt(st,T);else start(st,T,0,0);return}
+  if(st.leg===0&&T.B){start(st,T,1,0);return}
+  if(st.sch)parkAt(st,T);else start(st,T,0,0);
+}
+
 function step(en,dt,all){
   const st=en.st,tr=st.tr,T=en.T;if(!tr)return;
+    if(st.park){
+    st.v=0;
+    if(st.dw>0){st.dw-=dt;if(st.dw<=0){st.due=Math.max(0,(st.due||0)-1);start(st,T,0,0)}return}
+    if((st.due||0)>0)st.dw=3;   /* время пришло (или автобус опоздал): 3 секунды посадки */
+    return;
+  }
   const m=City.busKit.MODELS[en.b.m]||{l:12},L=Math.max(m.l/mpu(),22),W=L*.34;
   if(st.dw>0){st.dw-=dt;st.v=0;if(st.dw<=0&&st.fin)endTrip(st,T);return}
   const i=seg(tr,st.d),vmax=KMH[tr.ty[i-1]]*.85/3.6*4/mpu(),nx=tr.stops[st.si];let tv=vmax,lim=1e9;
@@ -1100,10 +1111,13 @@ let ents=[],hit=[];
     const T=trips(en.R,en.b),st=getSt(en.b),sc=parseDep(en.b.dep);en.T=T;en.e=T.e;en.st=st;st.sch=sc.length>0;
     if(!T.F){st.run=false;return}
     if(st.run){const kk=st.tr.key;if(kk!==T.F.key&&!(T.B&&kk===T.B.key))st.run=false;else{const nt=kk===T.F.key?T.F:T.B;if(nt!==st.tr){st.tr=nt;st.d=Math.min(st.d,nt.L)}}}
-    if(!st.run){
-      if(!st.sch)start(st,T,0,T.F.L*((en.i+.5)/en.n));
-      else if(t0!==null&&sc.some(t=>t0<=t1?(t>t0&&t<=t1):(t>t0||t<=t1)))start(st,T,0,0);
-    }
+        if(st.sch){
+      if(!st.run)parkAt(st,T);
+      if(t0!==null){
+        const c=sc.filter(t=>t0<=t1?(t>t0&&t<=t1):(t>t0||t<=t1)).length;
+        if(c)st.due=Math.min(3,(st.due||0)+c);
+      }
+    }else if(st.park||!st.run)start(st,T,0,T.F.L*((en.i+.5)/en.n));
   });
   if(ents.length){
     if($('#bs').classList.contains('on')){const all=ents.map(e=>e.st);ents.forEach(en=>{if(en.st.run)step(en,dt,all)})}
@@ -1127,7 +1141,7 @@ function etaSec(R,b,id){
       else if(l===0&&T.B){l=1;tr=T.B}else{tr=st.sch?null:T.F;l=0}
     }
   };
-  if(st.run&&st.tr)plan(st.leg,st.d,0,false);
+  if(st.run&&st.tr&&!st.park)plan(st.leg,st.d,0,false);
   if(st.sch){const t0=tod(),ds=parseDep(b.dep).map(t=>{let m=t-t0;if(m<=0)m+=1440;return m});plan(0,0,Math.min(...ds)*MIN,true)}
   return best;
 }
@@ -1151,6 +1165,11 @@ City.layers.over.push((ctx,P)=>{
     K.drawBus(ctx,{x:st.x,y:st.y,an:st.an||0},m.l,en.b.c,m.top);
     const o={x:st.x,y:st.y,L:Math.max(m.l/mpu(),22),b:en.b,R:en.e};
     hit[hit.length]=o;[].push(o);
+        if(st.park&&st.late){const z=sb(en.e.s[0]);if(z){
+      const sc=Math.max(1,.55/City.view.k);
+      ctx.font='800 '+(11*sc)+'px Manrope,system-ui,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.lineWidth=3.5*sc;ctx.lineJoin='round';ctx.strokeStyle=P.bg;ctx.strokeText('(Опаздывает)',z.x,z.y+20*sc);
+      ctx.fillStyle='#d7263d';ctx.fillText('(Опаздывает)',z.x,z.y+20*sc)}}
   });
   const s=City.sel;
   if(s&&s.k==='routes'&&s.o.vars)s.o.vars.forEach(v=>{const q=stopPts({s:v.s.filter(sb),loop:!!v.loop});if(q.length>1)line(q,5,s.o.c+'99',[10,8])});
