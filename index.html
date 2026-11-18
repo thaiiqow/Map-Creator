@@ -617,8 +617,30 @@ City.register({
     ctx.fillStyle='#1c2226';const cr=Math.min(W*.14,L*.026);
     [-.045,0,.045].forEach(f=>{ctx.beginPath();ctx.arc(X(f),0,cr,0,7);ctx.fill()});
   };
-  const MODELS={'MAZ 206.948':{img:'maz206_948.png',l:12},'MAZ 206.063':{img:'maz206_063.webp',l:12,top:maz063},'Yutong ZK6890HGQ':{img:'yutong_zk6890hgq.png',l:9,top:yutong}};
-  const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
+  /* вид сверху для «гармошек»: две секции и сочленение */
+const art=(ctx,L,W,col)=>{
+  const s=(a,b)=>{rr(ctx,L*a,-W/2,L*(b-a),W,W*.14);ctx.fillStyle=col;ctx.fill();ctx.lineWidth=1;ctx.strokeStyle='#0008';ctx.stroke()};
+  s(-.5,-.1);s(-.06,.5);
+  ctx.fillStyle='#2a2f33';ctx.fillRect(L*-.1,-W*.4,L*.04,W*.8);
+  ctx.fillStyle='#bfe3f2';ctx.fillRect(L*.465,-W*.36,L*.03,W*.72);
+  hatch(ctx,L*.2,-W*.3,L*.16,W*.6,W*.08);hatch(ctx,L*-.38,-W*.3,L*.16,W*.6,W*.08);
+};
+const MODELS={
+ 'MAZ 206.948':{img:'maz206_948.png',l:12},
+ 'MAZ 206.063':{img:'maz206_063.webp',l:12,top:maz063},
+ 'Yutong ZK6890HGQ':{img:'yutong_zk6890hgq.png',l:9,top:yutong},
+ 'МАЗ-203.065':{img:'maz20365.png',l:12},
+ 'МАЗ-203.946':{img:'maz203946.png',l:12},
+ 'МАЗ-206.945':{img:'maz206945.png',l:8.8},
+ 'МАЗ-216.066':{img:'maz21666.png',l:18.75,top:art},
+ 'ЛиАЗ-5292.65':{img:'lz5292.png',l:12.41},
+ 'ЛиАЗ-6213.65':{img:'lz6213.png',l:18.75,top:art},
+ 'НЕФАЗ-5299-40-52':{img:'nfz52994052.png',l:12},
+ 'ПАЗ-320415-04 Вектор Next':{img:'paz32041504.png',l:8.8},
+ 'Yutong ZK6126HG':{img:'yuzk6126.png',l:12},
+ 'Zhongtong LCK6126HQ':{img:'zhlck6126.png',l:12.5}
+};
+const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
   const pathOf=R=>{const b=R=>{const a=R.s.map(i=>City.S.stops.find(s=>s.id===i)).filter(Boolean).map(s=>[s.x,s.y]);if(R.loop&&a.length)a.push(a[0]);return a};return City.path?City.path(R,b):b(R)};
   City.busKit={MODELS,drawBus:(...a)=>drawBus(...a)};const CI=new WeakMap();
   const info=pts=>{let m=CI.get(pts);if(!m){const c=[0];for(let i=1;i<pts.length;i++)c.push(c[i-1]+Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]));m={c,L:c[c.length-1]};CI.set(pts,m)}return m};
@@ -1724,7 +1746,10 @@ dirty=true;
    Вставлять ПОСЛЕ плагина city-plugin (поворот/слежение). ===== */
 (function(){
 const TC=10,GROW=6,F='Manrope,system-ui,sans-serif';
-const CAP={'MAZ 206.948':68,'MAZ 206.063':40,'Yutong ZK6890HGQ':75};     /* вместимость автобусов */
+const CAP={'MAZ 206.948':68,'MAZ 206.063':40,'Yutong ZK6890HGQ':75,
+ 'МАЗ-203.065':100,'МАЗ-203.946':100,'МАЗ-206.945':68,'МАЗ-216.066':170,
+ 'ЛиАЗ-5292.65':112,'ЛиАЗ-6213.65':154,'НЕФАЗ-5299-40-52':111,
+ 'ПАЗ-320415-04 Вектор Next':50,'Yutong ZK6126HG':90,'Zhongtong LCK6126HQ':90};
 const IMP=new Set(['terminal','hangar','tower','industry','office']);      /* «важные» здания: спросим «Вы уверены?» */
 const PH={park:'Стоянка',taxiout:'Руление на взлёт',roll:'Разбег',fly:'Полёт',land:'Посадка',taxiin:'Руление на стоянку'};
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
