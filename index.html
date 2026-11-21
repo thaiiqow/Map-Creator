@@ -3124,5 +3124,344 @@ City.layers.over.push((c,P)=>{
 calc();ui();City.redraw();
 })();
 </script>
+<script>
+/* ===== Плагин: порт и корабли, погода, катаклизмы, боевые действия (танки, самолёты, взрывы).
+   Вставить В САМЫЙ КОНЕЦ, перед </body> (после плагина «образование»). ===== */
+(function(){
+const D=()=>City.S,E=City.esc,F='Manrope,system-ui,sans-serif',TC=10;
+const mpu=()=>((D().scale||50)/50),clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),rnd=(a,b)=>a+Math.random()*(b-a);
+const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]),now=()=>performance.now()/1000;
+const arr=k=>D()[k]||(D()[k]=[]);
+const cen=a=>[a.reduce((s,p)=>s+p[0],0)/a.length,a.reduce((s,p)=>s+p[1],0)/a.length];
+const bcen=b=>b.pts?cen(b.pts):[b.x+b.w/2,b.y+b.h/2];
+const lp=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];
+const dim=(hex,f)=>{const n=parseInt(hex.slice(1),16);return 'rgb('+[(n>>16)&255,(n>>8)&255,n&255].map(v=>Math.min(255,Math.round(v*f))).join(',')+')'};
+const near=(p,pts,r)=>pts.slice(1).some((q,i)=>dseg(p,pts[i],q)<r);
+const rrect=(c,x,y,w,h,r)=>{c.beginPath();(c.roundRect||c.rect).call(c,x,y,w,h,r)};
+const polyC=(c,pts)=>{c.beginPath();pts.forEach((p,i)=>i?c.lineTo(p[0],p[1]):c.moveTo(p[0],p[1]));c.closePath()};
+function atP(P,cm,d){let i=1;while(i<P.length-1&&cm[i]<d)i++;const a=P[i-1],b=P[i],l=(cm[i]-cm[i-1])||1,t=clamp((d-cm[i-1])/l,0,1);
+  return{x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t,tx:(b[0]-a[0])/l,ty:(b[1]-a[1])/l}}
+let M=[0,0],ver=0,dmg=false;City.on('change',()=>ver++);
+cv.addEventListener('pointermove',e=>{const V=City.view;M=[(e.offsetX-V.x)/V.k,(e.offsetY-V.y)/V.k]});
+$('#wrap').insertAdjacentHTML('beforeend','<div id="toast" class="fl" hidden style="left:50%;top:10px;transform:translateX(-50%);padding:8px 16px;font-weight:700;pointer-events:none;z-index:5"></div><div id="sbp" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:112px;padding:8px 14px;display:flex;gap:8px;align-items:center"><span id="sbn"></span><button id="sbok" class="b p">Готово</button><button id="sbno" class="b">Отмена</button></div>');
+let tT=0;const toast=t=>{const e=$('#toast');e.textContent=t;e.hidden=false;clearTimeout(tT);tT=setTimeout(()=>e.hidden=true,3500)};
+
+/* ================= ПОРТ И КОРАБЛИ ================= */
+const ports=()=>arr('ports'),sroutes=()=>arr('sroutes'),port=id=>ports().find(p=>p.id===id);
+const SHIPS={cargo:{n:'Контейнеровоз',l:200,w:30,kmh:32,col:'#b5453a'},tank:{n:'Танкер',l:230,w:34,kmh:28,col:'#3a4a5a'},ferry:{n:'Паром',l:110,w:20,kmh:40,col:'#e9edf0'}};
+let sr=null;
+const PC=new WeakMap(),SS=new WeakMap();
+function buildS(R){
+  const q=[],T=[],c=[];let tot=0;
+  const add=(p,st)=>{const l=q[q.length-1];if(l){const d=dst(l,p);if(d<.01){if(st)T.push(tot);return}tot+=d}q.push(p);c.push(tot);if(st)T.push(tot)};
+  const n=R.s.length;
+  for(let i=0;i<n;i++){const po=port(R.s[i]);if(!po)return null;add([po.x,po.y],1);if(i<n-1||R.loop)(R.legs[i]||[]).forEach(p=>add(p,0))}
+  if(R.loop){const po=port(R.s[0]);add([po.x,po.y],1)}
+  return q.length>1?{pts:q,c,T,L:tot}:null;
+}
+function pathS(R){let k=PC.get(R);if(k&&k.v===ver)return k.p;const p=buildS(R);PC.set(R,{v:ver,p});return p}
+function endS(){
+  if(!sr)return;const a=sr;sr=null;
+  if(a.s.length>1)City.add('sroutes',{n:'Морской маршрут '+(sroutes().length+1),c:RC[sroutes().length%6],s:a.s,legs:a.legs,loop:!!a.loop,m:'cargo',cnt:2});
+  City.redraw();
+}
+$('#sbok').onclick=endS;$('#sbno').onclick=()=>{sr=null;City.redraw()};
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||City.tool!=='sroute')return;if(e.key==='Enter')endS();if(e.key==='Escape'){sr=null;City.redraw()}});
+City.register({key:'ports',label:'Порт',group:'Транспорт/Порт',leaf:'Порт',color:'#1f6f9f',tool:'port',
+  hint:'Нажмите на карту (лучше у воды), чтобы поставить порт.',
+  click:p=>City.add('ports',{id:D().id++,x:p[0],y:p[1],n:'Порт '+(ports().length+1)}),
+  hit:(p,r)=>ports().find(o=>dst([o.x,o.y],p)<r+14),
+  inspector:o=>`<div style="font-size:13px;color:var(--mut)">Маршрутов через порт: <b style="color:var(--ink)">${sroutes().filter(R=>R.s.includes(o.id)).length}</b></div>`});
+City.register({key:'sroutes',label:'Морской маршрут',group:'Транспорт/Порт',leaf:'Морской маршрут',color:'#2e86ab',tool:'sroute',
+  hint:'Нажимайте порты по порядку. Клик по пустому месту (на воде) — маршрутная точка. Первый порт ещё раз — замкнуть кольцо. «Готово» — закончить.',
+  click(p,r){
+    const k=City.view.k;let best=null;
+    ports().forEach(o=>{const d=dst([o.x,o.y],r);if(d<24/k&&(!best||d<best.d))best={d,o}});
+    if(best){
+      const id=best.o.id;
+      if(!sr)sr={s:[id],legs:[],cur:[],loop:false};
+      else if(id===sr.s[0]&&sr.s.length>2){sr.legs.push(sr.cur);sr.cur=[];sr.loop=true;endS()}
+      else if(id!==sr.s[sr.s.length-1]){sr.legs.push(sr.cur);sr.cur=[];sr.s.push(id)}
+    }else if(sr)sr.cur.push(p.slice());
+  },
+  hit:(p,r)=>sroutes().find(R=>{const pa=pathS(R);return pa&&near(p,pa.pts,r+3)}),
+  inspector:o=>{const pa=pathS(o),m=pa?pa.L*mpu():0;
+    return `<div style="font-size:13px;color:var(--mut)">Портов: <b style="color:var(--ink)">${o.s.length}</b>${o.loop?', кольцо':''}<br>Длина: <b style="color:var(--ink)">${m<1000?Math.round(m)+' м':(m/1000).toFixed(1).replace('.',',')+' км'}</b></div>`
+    +`<label>Судно<select data-f="m">${Object.entries(SHIPS).map(([k,v])=>`<option value="${k}" ${o.m===k?'selected':''}>${v.n}</option>`).join('')}</select></label><label>Судов на маршруте<input type="number" min="0" max="12" data-f="cnt" value="${o.cnt===undefined?2:E(o.cnt)}"></label>`}});
+function shipsOf(R){
+  const pa=pathS(R);if(!pa)return null;
+  const n=clamp(Math.round(R.cnt===undefined||R.cnt===''?2:+R.cnt||0),0,12),sig=Math.round(pa.L)+'|'+n+'|'+pa.T.length;let st=SS.get(R);
+  if(!st||st.sig!==sig){const a=[];for(let k=0;k<n;k++){const d=pa.L*(k+.5)/n;let i=pa.T.findIndex(x=>x>d);if(i<0)i=pa.T.length-1;a.push({d,i,dir:1,dw:0,an:0,x:0,y:0})}st={sig,a};SS.set(R,st)}
+  return{pa,st};
+}
+function stepShip(t,R,pa,dt){
+  const v=SHIPS[R.m||'cargo'].kmh/3.6*4/mpu();
+  if(t.dw>0){t.dw-=dt;return}
+  const T=pa.T,rem=(T[t.i]-t.d)*t.dir;
+  if(rem<=.5){t.d=T[t.i];t.dw=4;
+    if(R.loop){if(t.i>=T.length-1){t.d=0;t.i=1}else t.i++}
+    else{t.i+=t.dir;if(t.i<0||t.i>=T.length){t.dir=-t.dir;t.i+=2*t.dir}}
+    return}
+  t.d+=t.dir*Math.min(v*dt,rem);
+  const q=atP(pa.pts,pa.c,t.d);t.x=q.x;t.y=q.y;t.an=Math.atan2(q.ty,q.tx)+(t.dir<0?Math.PI:0);
+}
+function drawShip(c,t,R){
+  const m=SHIPS[R.m||'cargo'],L=Math.max(m.l/mpu(),30),W=L*m.w/m.l;
+  c.save();c.translate(t.x,t.y);c.rotate(t.an);
+  if(t.dw<=0){c.beginPath();c.moveTo(-L/2,0);c.lineTo(-L*.9,-W*.6);c.lineTo(-L*.9,W*.6);c.closePath();c.fillStyle='rgba(255,255,255,.28)';c.fill()}
+  c.lineWidth=1;c.strokeStyle='#0009';
+  polyC(c,[[-L/2,-W/2],[L*.3,-W/2],[L/2,0],[L*.3,W/2],[-L/2,W/2]]);c.fillStyle=m.col;c.fill();c.stroke();
+  polyC(c,[[-L*.46,-W*.4],[L*.28,-W*.4],[L*.44,0],[L*.28,W*.4],[-L*.46,W*.4]]);c.fillStyle='rgba(255,255,255,.18)';c.fill();
+  if(R.m==='tank'||R.m==='cargo'&&false){}
+  if((R.m||'cargo')==='cargo'){const cl=['#d9534f','#2e86ab','#e9c46a','#1b998b'];for(let i=0;i<6;i++){c.fillStyle=cl[i%4];c.fillRect(-L*.3+i*L*.1,-W*.28,L*.085,W*.56)}}
+  else if(R.m==='tank'){c.fillStyle='#8d979e';for(let i=0;i<4;i++){c.beginPath();c.arc(-L*.2+i*L*.14,0,W*.28,0,7);c.fill();c.stroke()}}
+  else{c.fillStyle='#fff';c.fillRect(-L*.35,-W*.3,L*.6,W*.6);c.fillStyle='#2e86ab';c.fillRect(-L*.35,-W*.06,L*.6,W*.12)}
+  c.fillStyle='#fff';c.fillRect(-L*.46,-W*.32,L*.1,W*.64);c.strokeRect(-L*.46,-W*.32,L*.1,W*.64);
+  c.restore();
+}
+
+/* ================= ПОГОДА ================= */
+const WX=[['clear','☀','Ясно'],['rain','🌧','Дождь'],['snow','❄','Снег'],['hail','🧊','Град'],['blizz','🌨','Метель'],['fog','🌫','Туман'],['storm','⛈','Гроза']];
+const wx=()=>D().wx||(D().wx={t:'clear',auto:false,next:0});
+document.head.insertAdjacentHTML('beforeend','<style>#wxp{margin:0 6px 14px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--bg);font-size:13px}#wxp .g{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:6px}#wxp .b{padding:6px 0;text-align:center;background:var(--pan);font-size:15px}#wxp .b.on{background:var(--acc);color:var(--accink)}</style>');
+($('#ed')||$('#gp')||$('#hud')||$('#cname')).insertAdjacentHTML('afterend','<div id="wxp"><b>Погода</b><div class="g">'+WX.map(w=>`<button class="b" data-w="${w[0]}" title="${w[2]}">${w[1]}</button>`).join('')+'<button class="b" data-w="auto" title="Автосмена погоды">🔄</button></div></div>');
+function wxUI(){const W=wx();document.querySelectorAll('#wxp [data-w]').forEach(b=>b.classList.toggle('on',b.dataset.w==='auto'?!!W.auto:b.dataset.w===W.t))}
+$('#wxp').onclick=e=>{const b=e.target.closest('[data-w]');if(!b)return;const W=wx(),v=b.dataset.w;if(v==='auto')W.auto=!W.auto;else{W.t=v;W.auto=false}City.changed();wxUI()};
+const WS_={rain:{n:260,vx:-180,vy:1100,col:'rgba(170,200,235,.65)',ov:'rgba(60,80,110,.14)'},storm:{n:420,vx:-320,vy:1300,col:'rgba(170,200,235,.7)',ov:'rgba(15,20,40,.30)'},
+ snow:{n:180,vx:0,vy:75,col:'#fff',ov:'rgba(235,240,250,.10)'},hail:{n:140,vx:-120,vy:800,col:'#e6f2fb',ov:'rgba(120,140,160,.12)'},
+ blizz:{n:420,vx:-800,vy:140,col:'rgba(255,255,255,.8)',ov:'rgba(240,245,255,.30)'},fog:{n:0,ov:'rgba(215,222,228,.40)'}};
+let PA=[],PT='',lit=0,bolt=null,wl=now(),wuAt=0;
+function weather(c,P){
+  const W=wx(),n=now(),dt=Math.min(.1,Math.max(0,n-wl));wl=n;
+  const sp=WS_[W.t];if(!sp)return;
+  if(PT!==W.t){PT=W.t;PA=Array.from({length:sp.n},()=>({x:Math.random(),y:Math.random(),v:rnd(.7,1.3),s:Math.random()*6}))}
+  const d=devicePixelRatio||1,w=cv.width/d,h=cv.height/d;
+  c.save();c.setTransform(d,0,0,d,0,0);
+  c.fillStyle=sp.ov;c.fillRect(0,0,w,h);
+  if(W.t==='fog'){const g=c.createRadialGradient(w/2,h/2,Math.min(w,h)*.15,w/2,h/2,Math.max(w,h)*.7);g.addColorStop(0,'rgba(220,226,232,0)');g.addColorStop(1,'rgba(220,226,232,.45)');c.fillStyle=g;c.fillRect(0,0,w,h)}
+  c.strokeStyle=sp.col;c.fillStyle=sp.col;c.lineCap='round';
+  c.beginPath();
+  PA.forEach(p=>{
+    p.s+=dt;let vx=sp.vx,vy=sp.vy*p.v;if(W.t==='snow')vx=Math.sin(p.s*1.5)*30;
+    p.x=((p.x+vx*dt/w)%1+1)%1;p.y=((p.y+vy*dt/h)%1+1)%1;
+    const x=p.x*w,y=p.y*h;
+    if(W.t==='rain'||W.t==='storm'){c.moveTo(x,y);c.lineTo(x+sp.vx*.014,y+14)}
+    else if(W.t==='blizz'){c.moveTo(x,y);c.lineTo(x+26,y-4)}
+    else if(W.t==='snow'){c.moveTo(x+2.5,y);c.arc(x,y,2.5*p.v,0,7)}
+    else{c.moveTo(x+3,y);c.arc(x,y,3,0,7)}
+  });
+  if(W.t==='snow'||W.t==='hail')c.fill();else{c.lineWidth=W.t==='blizz'?2:1.2;c.stroke()}
+  if(W.t==='storm'){
+    if(lit<=0&&Math.random()<dt*.22){lit=1;let x=rnd(.1,.9)*w,y=0;bolt=[[x,y]];while(y<h*.6){x+=rnd(-28,28);y+=rnd(20,40);bolt.push([x,y])}}
+    if(lit>0){c.fillStyle='rgba(255,255,255,'+(lit*.45)+')';c.fillRect(0,0,w,h);if(bolt){c.beginPath();bolt.forEach((p,i)=>i?c.lineTo(p[0],p[1]):c.moveTo(p[0],p[1]));c.strokeStyle='rgba(255,255,240,'+lit+')';c.lineWidth=3;c.stroke()}lit-=dt*3}
+  }
+  c.restore();
+}
+
+/* ================= КАТАКЛИЗМЫ ================= */
+City.register({key:'craters',label:'Кратер',layer:'under',
+  draw(c){arr('craters').forEach(q=>{c.beginPath();c.arc(q.x,q.y,q.r*1.5,0,7);c.fillStyle='rgba(40,30,20,.18)';c.fill();c.beginPath();c.arc(q.x,q.y,q.r,0,7);c.fillStyle='#4a4038';c.fill();c.lineWidth=3;c.strokeStyle='#2a221c';c.stroke();c.beginPath();c.arc(q.x+3,q.y+3,q.r*.6,0,7);c.fillStyle='#2e2721';c.fill()})},
+  hit:(p,r)=>arr('craters').find(q=>dst([q.x,q.y],p)<q.r+r)});
+const EV=[];
+const boom=(x,y,r)=>{if(EV.length<260)EV.push({k:'boom',x,y,r,t0:now(),d:1.3})};
+function killCells(x,y,r,p,r0){
+  const Z=D().zones;if(!Z)return;
+  for(let j=Math.floor((y-r)/TC);j<=Math.floor((y+r)/TC);j++)for(let i=Math.floor((x-r)/TC);i<=Math.floor((x+r)/TC);i++){
+    const d=Math.hypot((i+.5)*TC-x,(j+.5)*TC-y);if(d>r||d<r0||Math.random()>p)continue;
+    const key=(i>>5)+','+(j>>5),n=((j&31)<<5)|(i&31),z=Z[key];
+    if(z&&z.t[n]!==' '){z.t=z.t.slice(0,n)+' '+z.t.slice(n+1);z.d=z.d.slice(0,n)+' '+z.d.slice(n+1);dmg=true;
+      if(/^ +$/.test(z.t))delete Z[key]}
+  }
+}
+function hurt(x,y,r,p,r0){
+  r0=r0||0;const S=D();let hit=0;
+  const keep=S.blds.filter(b=>{const c=bcen(b),d=dst(c,[x,y]);
+    if(d<r&&d>=r0&&Math.random()<p){if(sel&&sel.o===b)sel=null;if(hit++<3)boom(c[0],c[1],rnd(10,18));return false}return true});
+  if(hit){S.blds=keep;dmg=true}
+  if(S.trees){const k2=S.trees.filter(t=>!(dst([t.x,t.y],[x,y])<r&&Math.random()<p));if(k2.length!==S.trees.length){S.trees=k2;dmg=true}}
+  killCells(x,y,r,p,r0);
+}
+City.HINT.dis='Нажмите на карту, чтобы вызвать катаклизм в этом месте. «Отмена» вернёт город.';
+City.tools.dis=(p,r)=>{
+  City.push();const t=String(tt),n=now(),x=r[0],y=r[1];
+  if(t==='tornado'){EV.push({k:'tor',x,y,a:rnd(0,6.28),t0:n,d:16,r:34});toast('🌪 Торнадо!')}
+  else if(t==='tsunami'){EV.push({k:'tsu',x,y,t0:n,d:14,R:520});toast('🌊 Цунами!')}
+  else if(t==='meteor'){EV.push({k:'met',x,y,t0:n,d:1.6});toast('☄ Метеорит приближается!')}
+  else if(t==='quake'){const cr=[];for(let i=0;i<9;i++){let a=rnd(0,6.28),px=0,py=0;const pts=[[0,0]];for(let s=0;s<7;s++){a+=rnd(-.6,.6);px+=Math.cos(a)*rnd(15,30);py+=Math.sin(a)*rnd(15,30);pts.push([px,py])}cr.push(pts)}
+    EV.push({k:'qk',x,y,t0:n,d:6,cr,tk:0});toast('🌋 Землетрясение!')}
+};
+[['Торнадо','tornado','#7b8794'],['Цунами','tsunami','#2e86d0'],['Метеорит','meteor','#e07a2f'],['Землетрясение','quake','#8a5a3b']].forEach(a=>City.addLeaf('Катаклизмы',[a[0],'dis',a[1],a[2]]));
+const UPD={
+ tor(e,dt){e.a+=rnd(-1,1)*dt*1.4;e.x+=Math.cos(e.a)*30*dt;e.y+=Math.sin(e.a)*30*dt;hurt(e.x,e.y,e.r,1-Math.exp(-dt*3))},
+ tsu(e,dt,age){const rr=e.R*Math.min(1,age/(e.d*.7));hurt(e.x,e.y,rr,1-Math.exp(-dt*6),Math.max(0,rr-55))},
+ qk(e,dt,age){const s=1-age/e.d;cv.style.transform=`translate(${rnd(-6,6)*s}px,${rnd(-6,6)*s}px)`;e.tk-=dt;if(e.tk<=0){e.tk=.35;const x=e.x+rnd(-170,170),y=e.y+rnd(-170,170);hurt(x,y,28,.8)}}
+};
+const FIN={
+ shell(e){boom(e.x1,e.y1,rnd(10,18))},
+ qk(){cv.style.transform=''},
+ met(e){boom(e.x,e.y,90);arr('craters').push({x:e.x,y:e.y,r:34});dmg=true;hurt(e.x,e.y,70,1);hurt(e.x,e.y,200,.5,70);EV.push({k:'ring',x:e.x,y:e.y,t0:now(),d:1.2,R:200});toast('☄ Метеорит упал!')}
+};
+function drawEV(c,e,age,k){
+  const a=age/e.d;
+  if(e.k==='boom'){
+    c.globalAlpha=(1-a)*.5;c.fillStyle='#555';c.beginPath();c.arc(e.x,e.y-a*e.r*.8,e.r*(.7+a*.9),0,7);c.fill();
+    c.globalAlpha=Math.max(0,1-a*1.4);c.fillStyle='#ff8c1a';c.beginPath();c.arc(e.x,e.y,e.r*(.3+a*.9),0,7);c.fill();
+    c.fillStyle='#ffe08a';c.beginPath();c.arc(e.x,e.y,e.r*(.15+a*.4),0,7);c.fill();c.globalAlpha=1;
+  }else if(e.k==='shell'){const p=lp([e.x0,e.y0],[e.x1,e.y1],a);c.beginPath();c.arc(p[0],p[1],2.5/Math.min(1,k*2),0,7);c.fillStyle='#ffd27a';c.fill();
+    c.globalAlpha=.4;c.beginPath();c.moveTo(e.x0,e.y0);c.lineTo(p[0],p[1]);c.strokeStyle='#ffd27a';c.lineWidth=1.2;c.stroke();c.globalAlpha=1}
+  else if(e.k==='ring'){c.globalAlpha=1-a;c.beginPath();c.arc(e.x,e.y,e.R*a,0,7);c.lineWidth=8;c.strokeStyle='#e9d8b8';c.stroke();c.globalAlpha=1}
+  else if(e.k==='tor'){
+    const f=Math.min(1,age/1.5,(e.d-age)/1.5);c.globalAlpha=Math.max(0,f);
+    for(let i=0;i<14;i++){const cy=e.y-i*8,rx=6+i*3.2,ry=rx*.28;c.beginPath();c.ellipse(cy>0?e.x+Math.sin(age*3+i*.5)*i*.8:e.x+Math.sin(age*3+i*.5)*i*.8,cy,rx,ry,0,0,7);c.fillStyle='rgba(95,100,110,.32)';c.fill();
+      c.beginPath();c.ellipse(e.x+Math.sin(age*3+i*.5)*i*.8,cy,rx,ry,0,age*5+i,age*5+i+2.4);c.lineWidth=1.6;c.strokeStyle='rgba(40,44,52,.7)';c.stroke()}
+    c.fillStyle='#6b5a46';for(let i=0;i<14;i++){const an=age*6+i*.9,rr=e.r*(.5+(i%5)*.2);c.fillRect(e.x+Math.cos(an)*rr-1.5,e.y-4-(i*7)%70+Math.sin(an)*rr*.3,3,3)}
+    c.globalAlpha=1;
+  }else if(e.k==='tsu'){
+    const rr=e.R*Math.min(1,age/(e.d*.7)),al=a>.7?1-(a-.7)/.3:1;
+    c.globalAlpha=.16*al;c.fillStyle='#2e86d0';c.beginPath();c.arc(e.x,e.y,rr,0,7);c.fill();
+    c.globalAlpha=.7*al;c.lineWidth=18;c.strokeStyle='#3f9be0';c.beginPath();c.arc(e.x,e.y,Math.max(0,rr-9),0,7);c.stroke();
+    c.lineWidth=5;c.strokeStyle='#fff';c.beginPath();c.arc(e.x,e.y,rr,0,7);c.stroke();c.globalAlpha=1;
+  }else if(e.k==='met'){
+    const q=[300*(1-a),-500*(1-a)],hx=e.x+q[0],hy=e.y+q[1];
+    c.beginPath();c.arc(e.x,e.y,30+Math.sin(age*14)*5,0,7);c.lineWidth=3;c.strokeStyle='rgba(215,38,61,.8)';c.stroke();
+    c.beginPath();c.moveTo(hx+120,hy-200);c.lineTo(hx,hy);c.lineWidth=7;c.strokeStyle='rgba(255,170,60,.85)';c.stroke();
+    c.beginPath();c.arc(hx,hy,11,0,7);c.fillStyle='#fff3c4';c.fill();
+  }else if(e.k==='qk'){
+    c.globalAlpha=Math.max(0,1-a);c.lineWidth=2;c.strokeStyle='#1d1814';
+    e.cr.forEach(pts=>{c.beginPath();pts.forEach((p,i)=>i?c.lineTo(e.x+p[0],e.y+p[1]):c.moveTo(e.x+p[0],e.y+p[1]));c.stroke()});
+    c.beginPath();c.arc(e.x,e.y,20+age*40,0,7);c.strokeStyle='rgba(160,110,60,'+(.6*(1-a))+')';c.lineWidth=4;c.stroke();c.globalAlpha=1;
+  }
+}
+
+/* ================= ВОЙНЫ ================= */
+const wars=()=>D().wars||[],cs=()=>D().countries||[],cb=id=>cs().find(c=>c.id===id);
+const dB=(B,p)=>inPoly(p,B.pts)?0:Math.min(...B.pts.map((q,i)=>dseg(p,q,B.pts[(i+1)%B.pts.length])));
+const ntank=f=>f<1?0:clamp(Math.ceil(Math.sqrt(f)/3),3,24);
+function randIn(P){let x0=1e18,y0=1e18,x1=-1e18,y1=-1e18;P.forEach(p=>{x0=Math.min(x0,p[0]);x1=Math.max(x1,p[0]);y0=Math.min(y0,p[1]);y1=Math.max(y1,p[1])});
+  for(let i=0;i<30;i++){const p=[rnd(x0,x1),rnd(y0,y1)];if(inPoly(p,P))return p}return cen(P)}
+function spots(A,B,n){
+  const P=A.pts,o=[],cA=cen(P),cB=cen(B.pts);
+  P.forEach((a,i)=>{const b=P[(i+1)%P.length],m=Math.max(1,Math.floor(dst(a,b)/50));for(let q=0;q<m;q++){const p=lp(a,b,q/m);o.push({p,d:dB(B,p)})}});
+  o.sort((u,v)=>u.d-v.d);
+  return o.slice(0,n).map(s=>{const ix=cA[0]-s.p[0],iy=cA[1]-s.p[1],l=Math.hypot(ix,iy)||1,x=s.p[0]+ix/l*14,y=s.p[1]+iy/l*14;return{x,y,a:Math.atan2(cB[1]-y,cB[0]-x)}});
+}
+const RI=new WeakMap();
+function rinfo(R){let m=RI.get(R.pts);if(!m){const c=[0];for(let i=1;i<R.pts.length;i++)c.push(c[i-1]+dst(R.pts[i],R.pts[i-1]));m={c,L:c[c.length-1]};RI.set(R.pts,m)}return m}
+const WSt=new Map();
+function refresh(w,s,A,B){
+  const sides=[[A,B,w.fa],[B,A,w.fb]];
+  sides.forEach(([X,Y,f],k)=>{
+    const n=ntank(f);s.sp[k]=n?spots(X,Y,n):[];
+    const rs=D().roads.filter(R=>R.pts.length>1&&rinfo(R).L>40&&R.pts.some(p=>inPoly(p,X.pts))).map(R=>({R,d:Math.min(...R.pts.map(p=>dB(Y,p)))})).filter(q=>q.d<600).sort((u,v)=>u.d-v.d).slice(0,3).map(q=>q.R);
+    const want=rs.length?Math.min(rs.length*2,Math.ceil(n/3)):0;
+    let mine=s.conv.filter(t=>t.k===k&&rs.includes(t.R));
+    s.conv=s.conv.filter(t=>t.k!==k||mine.includes(t));
+    mine=mine.slice(0,want);s.conv=s.conv.filter(t=>t.k!==k||mine.includes(t));
+    for(let i=mine.length;i<want;i++){const R=rs[i%rs.length];s.conv.push({k,R,d:rnd(0,rinfo(R).L),dir:Math.random()<.5?1:-1})}
+    const nj=n?clamp(Math.round(n/6),1,4):0;
+    let js=s.jets.filter(j=>j.k===k);s.jets=s.jets.filter(j=>j.k!==k||js.indexOf(j)<nj);
+    for(let i=js.length;i<nj;i++){const h=cen(X.pts);s.jets.push({k,x:h[0],y:h[1],an:0,st:'idle',tm:rnd(0,4),tr:[],tt:0})}
+  });
+}
+function jetStep(j,A,B,dt){
+  const home=cen(A.pts);
+  if(j.st==='idle'){j.tm-=dt;if(j.tm<=0){j.st='out';j.tg=randIn(B.pts);j.x=home[0];j.y=home[1];j.tr=[]}return}
+  const dx=j.tg[0]-j.x,dy=j.tg[1]-j.y;let da=Math.atan2(dy,dx)-j.an;da=Math.atan2(Math.sin(da),Math.cos(da));
+  j.an+=clamp(da,-2.5*dt,2.5*dt);j.x+=Math.cos(j.an)*140*dt;j.y+=Math.sin(j.an)*140*dt;
+  j.tt-=dt;if(j.tt<=0){j.tt=.05;j.tr.push([j.x,j.y]);if(j.tr.length>18)j.tr.shift()}
+  if(Math.hypot(dx,dy)<16){
+    if(j.st==='out'){for(let i=0;i<3;i++)boom(j.tg[0]+rnd(-30,30),j.tg[1]+rnd(-30,30),rnd(18,30));j.st='ret';j.tg=[home[0]+rnd(-40,40),home[1]+rnd(-40,40)]}
+    else{j.st='idle';j.tm=rnd(3,8);j.tr=[]}
+  }
+}
+function warStep(dt){
+  const n=now(),W=wars(),ids=new Set(W.map(w=>w.id));
+  [...WSt.keys()].forEach(k=>{if(!ids.has(k))WSt.delete(k)});
+  W.forEach(w=>{
+    const A=cb(w.a),B=cb(w.b);if(!A||!B)return;
+    let s=WSt.get(w.id);if(!s){s={t:-9,sp:[[],[]],conv:[],jets:[],bt:0};WSt.set(w.id,s)}
+    s.bt-=dt;
+    if(w.civil){if(s.bt<=0){s.bt=rnd(.25,.7);const p=randIn(A.pts);boom(p[0],p[1],rnd(12,26))}return}
+    if(n-s.t>3){s.t=n;refresh(w,s,A,B)}
+    if(s.bt<=0){s.bt=rnd(.25,.8);const k=Math.random()<.5?0:1,L=s.sp[k],T=s.sp[1-k];
+      if(L.length&&T.length){const a=L[Math.floor(Math.random()*L.length)],b=T[Math.floor(Math.random()*T.length)];EV.push({k:'shell',x0:a.x,y0:a.y,x1:b.x+rnd(-40,40),y1:b.y+rnd(-40,40),t0:n,d:.6})}}
+    s.conv.forEach(t=>{const L=rinfo(t.R).L;t.d+=t.dir*22/mpu()*dt;if(t.d>L){t.d=L;t.dir=-1}if(t.d<0){t.d=0;t.dir=1}});
+    s.jets.forEach(j=>jetStep(j,j.k?B:A,j.k?A:B,dt));
+  });
+}
+function tank(c,x,y,a,col,sc){
+  const L=13*sc,W=L*.62;c.save();c.translate(x,y);c.rotate(a);c.lineWidth=.8*sc;c.strokeStyle='#000a';
+  c.fillStyle=dim(col,.6);c.fillRect(-L/2,-W/2,L,W);c.strokeRect(-L/2,-W/2,L,W);
+  c.fillStyle='#23272a';c.fillRect(-L/2,-W/2,L,W*.22);c.fillRect(-L/2,W*.28,L,W*.22);
+  c.fillStyle='#23272a';c.fillRect(L*.05,-W*.05,L*.55,W*.1);
+  c.beginPath();c.arc(-L*.05,0,W*.3,0,7);c.fillStyle=dim(col,.85);c.fill();c.stroke();c.restore();
+}
+function jetD(c,j,col,sc){
+  const L=24*sc;
+  if(j.tr.length>1){c.beginPath();j.tr.forEach((p,i)=>i?c.lineTo(p[0],p[1]):c.moveTo(p[0],p[1]));c.lineTo(j.x,j.y);c.lineWidth=2.2*sc;c.strokeStyle='rgba(255,255,255,.45)';c.stroke()}
+  c.save();c.translate(j.x,j.y);c.rotate(j.an);
+  polyC(c,[[.5,0],[.05,.12],[-.15,.5],[-.28,.5],[-.2,.1],[-.5,.22],[-.5,-.22],[-.2,-.1],[-.28,-.5],[-.15,-.5],[.05,-.12]].map(p=>[p[0]*L,p[1]*L]));
+  c.fillStyle='#8a929a';c.fill();c.lineWidth=.8*sc;c.strokeStyle='#000a';c.stroke();
+  c.fillStyle=col;c.fillRect(-L*.5,-L*.08,L*.12,L*.16);c.restore();
+}
+function drawWar(c,k){
+  const sc=Math.max(1,.5/k);
+  wars().forEach(w=>{
+    const s=WSt.get(w.id),A=cb(w.a),B=cb(w.b);if(!s||!A||!B||w.civil)return;
+    [A,B].forEach((X,i)=>{
+      (s.sp[i]||[]).forEach((t,q)=>tank(c,t.x,t.y,t.a+Math.sin(now()*2+q)*.03,X.c,sc));
+      s.conv.filter(t=>t.k===i).forEach(t=>{
+        const h=atP(t.R.pts,rinfo(t.R).c,t.d),o=t.dir*3;
+        tank(c,h.x-h.ty*o,h.y+h.tx*o,Math.atan2(h.ty,h.tx)+(t.dir<0?Math.PI:0),X.c,sc)});
+      s.jets.filter(j=>j.k===i&&j.st!=='idle').forEach(j=>jetD(c,j,X.c,sc));
+    });
+  });
+}
+
+/* ================= ОБЩИЙ СЛОЙ И ЦИКЛ ================= */
+City.layers.over.push((c,P)=>{
+  const k=City.view.k,sc=Math.max(1,.55/k),sel_=City.sel;
+  /* порты и маршруты */
+  sroutes().forEach(R=>{const pa=pathS(R);if(!pa)return;
+    if(sel_&&sel_.o===R)line(pa.pts,10,'#0c8a8670');
+    line(pa.pts,2.5,R.c,[12,9]);
+    (R.legs||[]).forEach(l=>l.forEach(p=>{c.beginPath();c.arc(p[0],p[1],4,0,7);c.fillStyle=R.c;c.fill();c.lineWidth=1.5;c.strokeStyle=P.wh;c.stroke()}))});
+  ports().forEach(p=>{
+    c.save();c.translate(p.x,p.y);c.scale(sc,sc);
+    if(sel_&&sel_.o===p){c.beginPath();c.arc(0,0,26,0,7);c.fillStyle='#0c8a8670';c.fill()}
+    c.fillStyle='#4b5d6b';c.fillRect(-24,4,48,7);c.fillStyle='#1f6f9f';rrect(c,-16,-12,32,20,5);c.fill();c.lineWidth=2;c.strokeStyle='#fff';c.stroke();
+    c.fillStyle='#fff';c.font='800 13px '+F;c.textAlign='center';c.textBaseline='middle';c.fillText('⚓',0,-2);c.restore();
+    if(k>.4&&p.n){c.font='700 11px '+F;c.textAlign='center';c.textBaseline='middle';c.lineJoin='round';c.lineWidth=3.5;c.strokeStyle=P.bg;c.strokeText(p.n,p.x,p.y+22*sc);c.fillStyle=P.ink;c.fillText(p.n,p.x,p.y+22*sc)}
+  });
+  if(sr&&City.tool!=='sroute')sr=null;
+  $('#sbp').hidden=!sr;
+  if(sr){$('#sbn').textContent='Портов: '+sr.s.length;
+    const q=[];sr.s.forEach((id,i)=>{const o=port(id);if(o)q.push([o.x,o.y]);(sr.legs[i]||[]).forEach(p=>q.push(p))});sr.cur.forEach(p=>q.push(p));
+    line(q.concat([M]),3,'#0c8a86',[8,6])}
+  sroutes().forEach(R=>{const o=shipsOf(R);if(o)o.st.a.forEach(t=>{if(t.x||t.y)drawShip(c,t,R)})});
+  drawWar(c,k);
+  EV.forEach(e=>drawEV(c,e,now()-e.t0,k));
+  weather(c,P);
+});
+let last=now(),sAt=0;
+(function loop(){
+  const n=now(),dt=Math.min(.1,Math.max(0,n-last));last=n;
+  try{
+    sroutes().forEach(R=>{const o=shipsOf(R);if(!o)return;o.st.a.forEach(t=>{
+      if(!t.x&&!t.y){const q=atP(o.pa.pts,o.pa.c,t.d);t.x=q.x;t.y=q.y;t.an=Math.atan2(q.ty,q.tx)}stepShip(t,R,o.pa,dt)})});
+    warStep(dt);
+    for(let i=EV.length-1;i>=0;i--){const e=EV[i],age=n-e.t0;
+      if(age>e.d){if(FIN[e.k])FIN[e.k](e);EV.splice(i,1);continue}
+      if(UPD[e.k])UPD[e.k](e,dt,age)}
+    const W=wx(),day=City.game?City.game.day:0;
+    if(W.auto&&day>=(W.next||0)){const L=['clear','clear','rain','snow','fog','storm','hail','blizz'];W.t=L[Math.floor(Math.random()*L.length)];W.next=day+rnd(2,5);City.changed();wxUI()}
+    if(n-sAt>.6){sAt=n;wxUI();if(dmg){dmg=false;City.changed()}}
+    if(EV.length||wars().length||W.t!=='clear'||sroutes().length)City.redraw();
+  }catch(x){console.error(x)}
+  requestAnimationFrame(loop);
+})();
+wxUI();City.redraw();
+})();
+</script>
 </body>
 </html>
