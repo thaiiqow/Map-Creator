@@ -2955,5 +2955,174 @@ cv.addEventListener('pointerup',e=>{
 City.redraw();
 })();
 </script>
+<script>
+/* ===== Плагин: образование (детсады, школы, колледжи, вузы) + разные формы зданий в зонах (2D и 3D).
+   Вставить В САМЫЙ КОНЕЦ, перед </body> (после плагина «страны, армии…»). ===== */
+(function(){
+const TC=10,CS=32,CW=320,GROW=6,F='Manrope,system-ui,sans-serif';
+const D=()=>City.S,E=City.esc,mpu=()=>((D().scale||50)/50);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const n0=v=>Math.round(v).toLocaleString('ru-RU');
+const area=a=>Math.abs(a.reduce((s,p,i)=>{const q=a[(i+1)%a.length];return s+p[0]*q[1]-q[0]*p[1]},0))/2;
+const cen=b=>b.pts?[b.pts.reduce((s,p)=>s+p[0],0)/b.pts.length,b.pts.reduce((s,p)=>s+p[1],0)/b.pts.length]:[b.x+b.w/2,b.y+b.h/2];
+
+/* ---------- образование ---------- */
+/* sh — доля жителей этого возраста, k — мест на 100 м² территории здания, r — радиус охвата, м */
+const ED={
+ kinder:{n:'Детский сад',who:'Детей',ic:'🧸',col:'#ffd9a0',sh:.05,k:15,r:500,sz:60},
+ school:{n:'Школа',who:'Учеников',ic:'🏫',col:'#f4b6c2',sh:.11,k:30,r:800,sz:90},
+ college:{n:'Колледж',who:'Студентов',ic:'📚',col:'#c3b1e1',sh:.03,k:40,r:3000,sz:100},
+ univ:{n:'Университет / вуз',who:'Студентов',ic:'🎓',col:'#a3c4f3',sh:.04,k:60,r:8000,sz:150}
+};
+Object.entries(ED).forEach(([t,e])=>{BLD[t]=[e.n,e.col,e.sz];City.addLeaf('Образование',[e.n,'bld',t,e.col])});
+const capOf=b=>Math.max(1,Math.round((b.pts?area(b.pts):b.w*b.h)*mpu()*mpu()/100*ED[b.t].k));
+let RES=new Map(),TOT={};
+function residents(){
+  const out=[];
+  D().blds.forEach(b=>{if(b.t!=='house')return;
+    const w=(b.pop===undefined||b.pop==='')?Math.max(1,Math.round((b.pts?area(b.pts):b.w*b.h)*mpu()*mpu()/25)):Math.max(0,+b.pop||0);
+    if(w){const c=cen(b);out.push([c[0],c[1],w])}});
+  const Z=D().zones,g=City.game?City.game.day:0;
+  if(Z)for(const key in Z){const z=Z[key],p=key.split(','),i0=+p[0]*CS,j0=+p[1]*CS;
+    for(let n=0;n<1024;n++){if(z.t.charAt(n)!=='r')continue;
+      const w=4*clamp((g-(z.d.charCodeAt(n)-256))/GROW,0,1);
+      if(w>0)out.push([(i0+(n&31)+.5)*TC,(j0+(n>>5)+.5)*TC,w])}}
+  return out;
+}
+function calc(){
+  RES=new Map();TOT={};
+  const bl=D().blds.filter(b=>ED[b.t]);if(!bl.length)return;
+  const R=residents(),m=mpu();
+  Object.keys(ED).forEach(t=>{
+    const e=ED[t],L=bl.filter(b=>b.t===t);if(!L.length)return;
+    const rr=e.r/m,dem=new Map(),res=new Map(),cs=new Map();
+    L.forEach(b=>{dem.set(b,0);res.set(b,0);cs.set(b,cen(b))});
+    let all=0;
+    R.forEach(([x,y,w])=>{all+=w;let best=null,bd=rr;
+      L.forEach(b=>{const c=cs.get(b),d=Math.hypot(c[0]-x,c[1]-y);if(d<bd){bd=d;best=b}});
+      if(best){dem.set(best,dem.get(best)+w*e.sh);res.set(best,res.get(best)+w)}});
+    let cap=0,st=0;
+    L.forEach(b=>{const c=capOf(b),d=dem.get(b),
+      s=(b.stu===undefined||b.stu==='')?Math.min(c,Math.round(d)):Math.max(0,Math.round(+b.stu)||0);
+      RES.set(b,{cap:c,dem:Math.round(d),res:Math.round(res.get(b)),st:s});cap+=c;st+=s});
+    TOT[t]={cnt:L.length,cap,st,need:Math.round(all*e.sh)};
+  });
+}
+const prevB=City.insp.blds;
+City.insp.blds=o=>{
+  const e=ED[o.t];if(!e)return prevB?prevB(o):'';
+  const r=RES.get(o)||{cap:capOf(o),dem:0,res:0,st:0},k='style="color:var(--ink)"';
+  return `<label>${e.who}<input type="number" min="0" data-f="stu" placeholder="авто (${n0(Math.min(r.cap,r.dem))})" value="${o.stu===undefined?'':E(o.stu)}"></label>`
+  +`<div style="font-size:13px;color:var(--mut)">Сейчас: <b ${k}>${n0(r.st)}</b> из ${n0(r.cap)} мест<br>Жителей в радиусе ${n0(e.r)} м: <b ${k}>${n0(r.res)}</b><br>Потребность: <b ${k}>${n0(r.dem)}</b>`
+  +(r.dem>r.cap?`<br><span style="color:var(--red)">Не хватает мест: ${n0(r.dem-r.cap)}</span>`:'')+'</div>';
+};
+document.head.insertAdjacentHTML('beforeend','<style>#ed{margin:0 6px 14px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--bg);font-size:13px}#ed .er{display:flex;justify-content:space-between;gap:6px;padding:2px 0}#ed .er span,#ed small{color:var(--mut)}#ed small{display:block;margin:-2px 0 4px 22px}</style>');
+($('#gp')||$('#hud')||$('#cname')).insertAdjacentHTML('afterend','<div id="ed" hidden></div>');
+function ui(){
+  const el=$('#ed'),ks=Object.keys(TOT);el.hidden=!ks.length;if(!ks.length)return;
+  el.innerHTML='<b>Образование</b>'+ks.map(t=>{const e=ED[t],o=TOT[t],bad=o.need>o.cap;
+    return `<div class="er"><div>${e.ic} ${e.n} ×${o.cnt}</div><span>${n0(o.st)} / ${n0(o.cap)}</span></div><small${bad?' style="color:var(--red)"':''}>нужно мест: ${n0(o.need)}</small>`}).join('');
+}
+setInterval(()=>{try{calc();ui();City.redraw()}catch(x){console.error(x)}},1000);
+
+/* ---------- формы зданий в зонах ---------- */
+const ZT={'#e9a77c':'r','#f2cf54':'c','#7aa6e8':'o','#9a958e':'i'},ZC={r:'#e9a77c',c:'#f2cf54',o:'#7aa6e8',i:'#9a958e'},HB={r:12,c:16,o:55,i:22};
+const sq=(a,b,c,d)=>[[a,b],[c,b],[c,d],[a,d]];
+const circ=(x,y,r)=>Array.from({length:10},(_,i)=>[x+r*Math.cos(i*Math.PI/5),y+r*Math.sin(i*Math.PI/5)]);
+/* вариант = список частей [контур в долях 0..1, тон ('l' светлее, 'd' темнее), множитель высоты] */
+const SH={
+ r:[[[sq(0,0,1,1)]],
+    [[[[0,0],[1,0],[1,.45],[.45,.45],[.45,1],[0,1]]]],
+    [[sq(0,0,.45,1)],[sq(.55,.25,1,1),'l',.8]],
+    [[[[0,0],[1,0],[1,1],[.7,1],[.7,.4],[.3,.4],[.3,1],[0,1]]]]],
+ c:[[[sq(0,.15,1,.85)]],
+    [[[[0,0],[1,0],[1,.4],[.65,.4],[.65,1],[.35,1],[.35,.4],[0,.4]]]],
+    [[sq(0,0,.6,.55)],[sq(.4,.45,1,1),'l',.8]],
+    [[[[.2,0],[.8,0],[1,.2],[1,.8],[.8,1],[.2,1],[0,.8],[0,.2]]]]],
+ o:[[[sq(.1,.1,.9,.9)]],
+    [[sq(0,0,1,1),null,.5],[sq(.25,.25,.75,.75),'l',1.2]],
+    [[sq(.3,0,.7,1)]],
+    [[[[.5,0],[1,.35],[.82,1],[.18,1],[0,.35]]]]],
+ i:[[[sq(0,.25,1,1)],[sq(.72,0,.88,.25),'d',2]],
+    [[[[0,.3],[.25,0],[.25,.3],[.5,0],[.5,.3],[.75,0],[.75,.3],[1,0],[1,1],[0,1]]]],
+    [[sq(0,0,.55,1)],[circ(.78,.5,.2),'l',.8]],
+    [[[[0,0],[.5,0],[.5,.55],[1,.55],[1,1],[0,1]]]]]
+};
+const hh=(i,j,s)=>((i*374761393+j*668265263+s*2147483)>>>0)%1000/1000;
+const variant=(t,i,j)=>SH[t][Math.floor(hh(i,j,1)*4)];
+function shape(c,t,x,y,w,h){
+  const i=Math.floor((x+w/2)/TC),j=Math.floor((y+h/2)/TC);
+  c.lineJoin='round';c.lineWidth=.8/City.view.k;c.strokeStyle='#00000066';
+  variant(t,i,j).forEach(([p,tn])=>{
+    poly(p.map(q=>[x+q[0]*w,y+q[1]*h]));c.fillStyle=ZC[t];c.fill();
+    if(tn){c.fillStyle=tn==='l'?'rgba(255,255,255,.35)':'rgba(0,0,0,.3)';c.fill()}
+    c.stroke();
+  });
+}
+/* подмена прямоугольников зон из основного плагина на формы */
+let pend=null,inZ=false;
+const P0=Object.getPrototypeOf(ctx),oF=P0.fillRect,oS=P0.strokeRect,_d0=draw;
+draw=function(){
+  inZ=false;pend=null;
+  ctx.fillRect=function(x,y,w,h){
+    const fs=this.fillStyle,t=ZT[fs];
+    if(t&&w>0&&w<=TC+.01&&h<=TC+.01){inZ=true;pend=[x,y,w,h];this.save();try{shape(this,t,x,y,w,h)}finally{this.restore()}return}
+    if(inZ&&(fs==='rgba(255, 255, 255, 0.6)'||fs==='#5b5f63'))return;   /* окна и труба старого вида */
+    return oF.call(this,x,y,w,h);
+  };
+  ctx.strokeRect=function(x,y,w,h){
+    if(pend&&pend[0]===x&&pend[1]===y&&pend[2]===w&&pend[3]===h){pend=null;return}
+    return oS.call(this,x,y,w,h);
+  };
+  try{_d0()}finally{delete ctx.fillRect;delete ctx.strokeRect}
+};
+City.layers.under.push(()=>{inZ=false});
+
+/* ---------- 3D для зон ---------- */
+const boxOf=(t,f)=>t==='r'?[TC*(.25+.5*f),TC*(.25+.5*f)]:t==='c'?[TC*(.3+.6*f),TC*(.25+.35*f)]:t==='o'?[TC*(.3+.5*f),TC*(.3+.5*f)]:[TC*(.35+.55*f),TC*(.3+.4*f)];
+const dim=(hex,f)=>{const n=parseInt(hex.slice(1),16);return 'rgb('+[(n>>16)&255,(n>>8)&255,n&255].map(v=>Math.min(255,Math.round(v*f))).join(',')+')'};
+function ext(c,pts,h,col,tn,k){
+  poly(pts.map(p=>[p[0]+h*.5,p[1]+h*.2]));c.fillStyle='#00000028';c.fill();
+  c.beginPath();
+  pts.forEach((a,i)=>{const b=pts[(i+1)%pts.length];c.moveTo(a[0],a[1]);c.lineTo(b[0],b[1]);c.lineTo(b[0],b[1]-h);c.lineTo(a[0],a[1]-h);c.closePath()});
+  c.fillStyle=dim(col,.68);c.fill();c.lineWidth=.7/k;c.strokeStyle='#00000066';c.stroke();
+  poly(pts.map(p=>[p[0],p[1]-h]));c.fillStyle=dim(col,tn==='l'?1.12:tn==='d'?.7:1);c.fill();c.stroke();
+}
+const d3on=()=>{const b=$('#d3');return !!b&&b.classList.contains('on')};
+
+/* ---------- слой поверх: метки образования, радиус охвата, 3D зон ---------- */
+City.layers.over.push((c,P)=>{
+  const k=City.view.k,u=1/k,sc=Math.max(1,.55/k),sel=City.sel;
+  if(sel&&sel.k==='blds'&&ED[sel.o.t]){
+    const p=cen(sel.o),r=ED[sel.o.t].r/mpu();
+    c.beginPath();c.arc(p[0],p[1],r,0,7);c.fillStyle='#0c8a8616';c.fill();c.lineWidth=2*u;c.strokeStyle='#0c8a86';c.setLineDash([10*u,8*u]);c.stroke();c.setLineDash([]);
+  }
+  if(k>.25)D().blds.forEach(b=>{
+    const e=ED[b.t],r=RES.get(b);if(!e||!r)return;const p=cen(b),t=e.ic+' '+n0(r.st);
+    c.font='700 '+(11*sc)+'px '+F;c.textAlign='center';c.textBaseline='middle';c.lineJoin='round';c.lineWidth=3.5*sc;c.strokeStyle=P.bg;
+    c.strokeText(t,p[0],p[1]);c.fillStyle=r.dem>r.cap?'#d7263d':P.ink;c.fillText(t,p[0],p[1]);
+  });
+  const Z=D().zones;if(!Z||!d3on()||TC*k<4)return;
+  const m=c.getTransform().invertSelf(),g=City.game?City.game.day:0,cs=[[0,0],[cv.width,0],[cv.width,cv.height],[0,cv.height]].map(([a,b])=>{const q=m.transformPoint({x:a,y:b});return[q.x,q.y]});
+  const x0=Math.min(...cs.map(q=>q[0]))-40,x1=Math.max(...cs.map(q=>q[0]))+40,y0=Math.min(...cs.map(q=>q[1]))-40,y1=Math.max(...cs.map(q=>q[1]))+140,L=[];
+  for(const key in Z){
+    const p=key.split(','),cx=+p[0]*CW,cy=+p[1]*CW;if(cx>x1||cx+CW<x0||cy>y1||cy+CW<y0)continue;
+    const z=Z[key],i0=+p[0]*CS,j0=+p[1]*CS;
+    for(let n=0;n<1024;n++){
+      const t=z.t.charAt(n);if(t===' ')continue;
+      const f=clamp((g-(z.d.charCodeAt(n)-256))/GROW,0,1);if(f<=0)continue;
+      const i=i0+(n&31),j=j0+(n>>5),x=i*TC,y=j*TC;if(x>x1||x+TC<x0||y>y1||y+TC<y0)continue;
+      const [w,h]=boxOf(t,f),bx=x+(TC-w)/2,by=y+(TC-h)/2;
+      L.push({t,bx,by,w,h,f,i,j,y:by+h});
+    }
+  }
+  L.sort((a,b)=>a.y-b.y).forEach(o=>{
+    const H=HB[o.t]*(.4+.6*o.f)*(.75+.5*hh(o.i,o.j,2));
+    variant(o.t,o.i,o.j).forEach(([p,tn,hf])=>ext(c,p.map(q=>[o.bx+q[0]*o.w,o.by+q[1]*o.h]),H*(hf||1),ZC[o.t],tn,k));
+  });
+});
+calc();ui();City.redraw();
+})();
+</script>
 </body>
 </html>
