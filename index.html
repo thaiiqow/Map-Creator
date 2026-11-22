@@ -543,7 +543,8 @@ City.register({
 <script>
 /* Плагин: масштаб, линейка, координаты, компас, граница города, население, автобусы */
 (function(){
-  const mpu=()=>((City.S.scale||50)/50);                       /* метров в одной единице карты */
+  const mpu=()=>((City.S.scale||50)/50);
+  City.bu=()=>Math.max(1/mpu(),1.5); /* единиц карты на метр, с общим минимумом для всех */
   const fm=u=>{const m=Math.abs(u*mpu()),g=u<0?'−':'';return g+(m<1000?Math.round(m)+' м':(m/1000).toFixed(2).replace('.',',')+' км')};
   const len=a=>a.slice(1).reduce((s,p,i)=>s+Math.hypot(p[0]-a[i][0],p[1]-a[i][1]),0);
   const area=a=>Math.abs(a.reduce((s,p,i)=>{const q=a[(i+1)%a.length];return s+p[0]*q[1]-q[0]*p[1]},0))/2;
@@ -627,8 +628,10 @@ const art=(ctx,L,W,col)=>{
 };
 /* крыши по фото: координаты в долях снимка (x слева направо, y сверху вниз), перед автобуса справа */
 const mkRoof=sp=>(ctx,L,W,col)=>{
-  const s0=sp.s0||0,s1=sp.s1||1,X=f=>((f-s0)/(s1-s0)-.5)*L,Y=f=>(f-.5)*W;
-  ctx.lineWidth=1;ctx.strokeStyle='#0008';
+  const s0=sp.s0||0,s1=sp.s1||1,mp=sp.map||[[s0,0],[s1,1]];
+const mi=f=>{let i=1;while(i<mp.length-1&&f>mp[i][0])i++;const a=mp[i-1],b=mp[i];return a[1]+(f-a[0])/(b[0]-a[0])*(b[1]-a[1])};
+const X=f=>(mi(f)-.5)*L,Y=f=>(f-.5)*W;
+ctx.lineWidth=1;ctx.strokeStyle='#0008';
   if(sp.sec){
     sp.sec.forEach(([a,b])=>{rr(ctx,X(a),-W/2,X(b)-X(a),W,W*.14);ctx.fillStyle=col;ctx.fill();ctx.stroke()});
     ctx.fillStyle='#2a2f33';ctx.fillRect(X(sp.sec[0][1]),-W*.4,X(sp.sec[1][0])-X(sp.sec[0][1]),W*.8);
@@ -654,11 +657,11 @@ const roofs={
    ['A',.375,.565,.12,.78,[[.42,.46],[.45,.46],[.48,.46],[.51,.46]],.04],
    ['B',.59,.87,.05,.95,'#00000030'],['V',.6,.68,.2,.8,3],['V',.69,.77,.2,.8,3],['V',.78,.86,.2,.8,3]]}),
  maz206945:mkRoof({it:[['H',.135,.265,.37,.62,G],['A',.3,.54,.03,.87,[[.35,.46],[.395,.46],[.44,.46],[.485,.46]],.05],['H',.61,.735,.37,.62,G]]}),
- maz216066:mkRoof({sec:[[0,.385],[.485,1]],it:[
+ maz216066:mkRoof({map:[[0,0],[.385,.32],[.485,.36],[1,1]],sec:[[0,.385],[.485,1]],it:[
    ['B',0,.09,.05,.5,'#00000020'],['B',.135,.33,.1,.85,'#ffffff30'],['A',.22,.305,.25,.45,[[.235,.35],[.255,.35],[.275,.35],[.295,.35]],.03],
    ['B',.58,.81,.1,.85,'#ffffff30'],['A',.6,.68,.25,.45,[[.615,.35],[.635,.35],[.655,.35],[.67,.35]],.03]]}),
  liaz529265:mkRoof({it:[['H',.275,.34,.33,.62,G],['A',.47,.66,.1,.8,[[.6,.4],[.64,.4],[.6,.6],[.64,.6]],.05],['H',.75,.82,.33,.62,G],['C',.84,.33,.05,'#8d979e']]}),
- liaz621365:mkRoof({s0:.055,s1:.93,sec:[[.055,.43],[.445,.93]],it:[
+ liaz621365:mkRoof({map:[[.055,0],[.43,.32],[.445,.36],[.93,1]],sec:[[.055,.43],[.445,.93]],it:[
    ['H',.14,.18,.3,.7,G],['B',.195,.32,.1,.8,'#ffffff30'],['A',.27,.32,.12,.78,[[.285,.35],[.3,.5],[.285,.65]],.06],['H',.37,.417,.3,.7,G],
    ['H',.475,.517,.3,.7,G],['B',.6,.73,.1,.8,'#ffffff30'],['A',.68,.73,.12,.78,[[.695,.35],[.71,.5],[.695,.65]],.06],['H',.78,.82,.3,.7,G]]}),
  nefaz:mkRoof({s0:.055,s1:.995,it:[['B',.095,.175,0,.27,'#e6e9ec'],['C',.17,.14,.06,'#1c2226'],['H',.165,.25,.33,.63,G],
@@ -671,9 +674,9 @@ const MODELS={
  'Yutong ZK6890HGQ':{img:'yutong_zk6890hgq.png',l:9,top:yutong},
   'МАЗ-203.065':{img:'maz20365.png',l:12,top:roofs.maz203065},
  'МАЗ-203.946':{img:'maz203946.png',l:12,top:roofs.maz203946},
- 'МАЗ-206.945':{img:'maz206945.png',l:8.8,top:roofs.maz206945},
+ 'МАЗ-206.945':{img:'maz206945.png',l:12,top:roofs.maz206945},
  'МАЗ-216.066':{img:'maz21666.png',l:18.75,top:roofs.maz216066},
- 'ЛиАЗ-5292.65':{img:'lz5292.png',l:12.41,top:roofs.liaz529265},
+ 'ЛиАЗ-5292.65':{img:'lz5292.png',l:12,top:roofs.liaz529265},
  'ЛиАЗ-6213.65':{img:'lz6213.png',l:18.75,top:roofs.liaz621365},
  'НЕФАЗ-5299-40-52':{img:'nfz52994052.png',l:12,top:roofs.nefaz},
  'ПАЗ-320415-04 Вектор Next':{img:'paz32041504.png',l:8.8,top:roofs.paz},
@@ -693,7 +696,7 @@ const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
   }
   const rr=(ctx,x,y,w,h,r)=>{ctx.beginPath();(ctx.roundRect||ctx.rect).call(ctx,x,y,w,h,r)};
   function drawBus(ctx,b,lm,col,top){
-    const L=Math.max(lm/mpu(),22),W=L*.34;
+    const L=lm*City.bu(),W=2.55*City.bu();
     ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.an);
     if(top){top(ctx,L,W,col);ctx.restore();return}
     ctx.lineWidth=1;ctx.strokeStyle='#0008';
@@ -1143,7 +1146,7 @@ function step(en,dt,all){
     if((st.due||0)>0)st.dw=3;   /* время пришло (или автобус опоздал): 3 секунды посадки */
     return;
   }
-  const m=City.busKit.MODELS[en.b.m]||{l:12},L=Math.max(m.l/mpu(),22),W=L*.34;
+  const m=City.busKit.MODELS[en.b.m]||{l:12},L=m.l*City.bu(),W=2.55*City.bu();
   if(st.dw>0){st.dw-=dt;st.v=0;if(st.dw<=0&&st.fin)endTrip(st,T);return}
   const i=seg(tr,st.d),vmax=KMH[tr.ty[i-1]]*.85/3.6*4/mpu(),nx=tr.stops[st.si];let tv=vmax,lim=1e9;
   if(nx){const rem=nx.s-st.d;
@@ -1188,7 +1191,7 @@ let ents=[],hit=[];
     let tx=0,ty=0;
     if(st.park&&!((st.due||0)>0)){
       const key=en.e.s[0],slot=slots[key]=(slots[key]===undefined?0:slots[key]+1);
-      const Lb=Math.max(((City.busKit.MODELS[en.b.m]||{l:12}).l)/mpu(),22),a=st.an||0,SIDE=10,back=slot*(Lb+2);
+      const Lb=((City.busKit.MODELS[en.b.m]||{l:12}).l)*City.bu(),a=st.an||0,SIDE=10,back=slot*(Lb+2);
       tx=-Math.sin(a)*SIDE-Math.cos(a)*back;ty=Math.cos(a)*SIDE-Math.sin(a)*back;
     }
     const k=Math.min(1,dt*3);
@@ -1239,7 +1242,7 @@ City.layers.over.push((ctx,P)=>{
     const st=en.st;if(!st||!st.run)return;const m=K.MODELS[en.b.m]||{l:12};
         const dx=st.ox||0,dy=st.oy||0;
     K.drawBus(ctx,{x:st.x+dx,y:st.y+dy,an:st.an||0},m.l,en.b.c,m.top);
-    const o={x:st.x+dx,y:st.y+dy,L:Math.max(m.l/mpu(),22),b:en.b,R:en.e};
+    const o={x:st.x+dx,y:st.y+dy,L:m.l*City.bu(),b:en.b,R:en.e};
     hit[hit.length]=o;[].push(o);
         if(st.park&&st.late){const z=sb(en.e.s[0]);if(z){
       const sc=Math.max(1,.55/City.view.k);
