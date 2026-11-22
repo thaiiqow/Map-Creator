@@ -3463,5 +3463,89 @@ let last=now(),sAt=0;
 wxUI();City.redraw();
 })();
 </script>
+<script>
+/* ===== Плагин: АТП, службы и порт рисуются как здания (прямоугольник или контур).
+   Вставить В САМЫЙ КОНЕЦ, перед </body>. Старые точечные объекты продолжают работать. ===== */
+(function(){
+const D=()=>City.S,F='Manrope,system-ui,sans-serif';
+const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+const SV={fire:['Пожарная часть','🚒','#e4572e'],police:['Полиция','🚓','#2e5aa8'],amb:['Скорая помощь','🚑','#d7263d'],garbage:['Вывоз мусора','🗑️','#6b7a3c'],morgue:['Вывоз тел','⚰️','#59636b'],gas:['Газовая служба','🔥','#e9a400']};
+const K={depots:{col:'#0c8a86',ic:'АТП',def:[64,44],tool:'depot'},ports:{col:'#1f6f9f',ic:'⚓',def:[100,56],tool:'port'},svc:{def:[50,40],tool:'svc'}};
+const TOOLS=['depot','port','svc'];
+const look=(k,o)=>k==='svc'?{col:(SV[o.t]||SV.fire)[2],ic:(SV[o.t]||SV.fire)[1]}:K[k];
+let fs=null,polyMode=false;
+
+$('#wrap').insertAdjacentHTML('beforeend','<div id="fm" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:112px;padding:4px;display:flex;gap:2px;align-items:center"><button id="fm-r" class="b on">Прямоугольник</button><button id="fm-p" class="b">Контур</button><span id="fm-n" hidden style="padding:0 8px"></span><button id="fm-ok" class="b p" hidden>Готово</button><button id="fm-no" class="b" hidden>Отмена</button></div>');
+const mode=m=>{polyMode=m;fs=null;$('#fm-r').classList.toggle('on',!m);$('#fm-p').classList.toggle('on',m);City.redraw()};
+$('#fm-r').onclick=()=>mode(false);$('#fm-p').onclick=()=>mode(true);
+$('#fm-ok').onclick=()=>{done();};$('#fm-no').onclick=()=>{fs=null;City.redraw()};
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||!TOOLS.includes(City.tool))return;if(e.key==='Enter')done();if(e.key==='Escape'){fs=null;City.redraw()}});
+
+function create(k,extra,pts){
+  const S=D(),c=[pts.reduce((s,p)=>s+p[0],0)/pts.length,pts.reduce((s,p)=>s+p[1],0)/pts.length];
+  S[k]=S[k]||[];
+  let o;
+  if(k==='depots')o={id:S.id++,x:c[0],y:c[1],n:'АТП '+(S.depots.length+1),pts};
+  else if(k==='ports')o={id:S.id++,x:c[0],y:c[1],n:'Порт '+(S.ports.length+1),pts};
+  else o={x:c[0],y:c[1],t:extra.t,n:SV[extra.t][0]+' '+(S.svc.filter(s=>s.t===extra.t).length+1),pts};
+  City.add(k,o);
+}
+function done(){
+  const f=fs;fs=null;if(!f)return;
+  let pts=null;
+  if(f.mode==='r'){
+    const a=f.a,b=f.b;let w=Math.abs(b[0]-a[0]),h=Math.abs(b[1]-a[1]),x=Math.min(a[0],b[0]),y=Math.min(a[1],b[1]);
+    if(w<8&&h<8){[w,h]=K[f.k].def;x=a[0]-w/2;y=a[1]-h/2}
+    pts=[[x,y],[x+w,y],[x+w,y+h],[x,y+h]];
+  }else if(f.pts&&f.pts.length>2)pts=f.pts;
+  if(pts)create(f.k,f.extra,pts);
+  City.redraw();
+}
+function begin(k,p,extra){
+  if(!polyMode){fs={k,extra,mode:'r',a:p,b:p,down:true};return}
+  if(!fs||fs.k!==k||fs.mode!=='p'){fs={k,extra,mode:'p',pts:[p]};return}
+  const z=City.view.k,l=fs.pts[fs.pts.length-1],f0=fs.pts[0];
+  if(dst(l,p)<6/z||(fs.pts.length>2&&dst(f0,p)<12/z))done();else fs.pts.push(p);
+}
+City.tools.depot=p=>begin('depots',p);
+City.tools.port=p=>begin('ports',p);
+City.tools.svc=p=>{const t=String(tt);if(!SV[t])return;begin('svc',p,{t})};
+
+cv.addEventListener('pointermove',()=>{if(fs&&fs.mode==='r'&&fs.down){fs.b=mouse.slice();City.redraw()}});
+cv.addEventListener('pointerup',()=>{if(fs&&fs.mode==='r'&&fs.down){fs.b=mouse.slice();done()}});
+
+/* выбор и ластик: по форме здания */
+['depots','svc','ports'].forEach(k=>City.hits.push({key:k,fn:p=>[...(D()[k]||[])].reverse().find(o=>o.pts&&inPoly(p,o.pts))}));
+
+const pth=a=>{ctx.beginPath();a.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath()};
+City.layers.over.push((c,P)=>{
+  const k=City.view.k,sc=Math.max(1,.55/k),sel=City.sel;
+  const on=TOOLS.includes(City.tool);if(!on)fs=null;
+  $('#fm').hidden=!on;
+  if(on){const n=fs&&fs.mode==='p';$('#fm-n').hidden=$('#fm-ok').hidden=$('#fm-no').hidden=!n;if(n)$('#fm-n').textContent='Точек: '+fs.pts.length}
+  ['depots','ports','svc'].forEach(key=>(D()[key]||[]).forEach(o=>{
+    if(!o.pts)return;const L=look(key,o);
+    pth(o.pts);c.fillStyle=L.col+'99';c.fill();c.lineWidth=2;c.lineJoin='round';c.strokeStyle=L.col;c.stroke();
+    if(sel&&sel.o===o){pth(o.pts);c.lineWidth=4;c.strokeStyle='#0c8a86';c.stroke()}
+    c.save();c.translate(o.x,o.y);c.scale(sc,sc);
+    c.beginPath();c.arc(0,0,11,0,7);c.fillStyle=L.col;c.fill();c.lineWidth=2;c.strokeStyle='#fff';c.stroke();
+    c.fillStyle='#fff';c.font=(L.ic.length>2?'800 7px ':'12px ')+F;c.textAlign='center';c.textBaseline='middle';c.fillText(L.ic,0,1);c.restore();
+    if(k>.4&&o.n){c.font='700 11px '+F;c.textAlign='center';c.textBaseline='middle';c.lineWidth=3.5;c.strokeStyle=P.bg;c.strokeText(o.n,o.x,o.y+18*sc);c.fillStyle=P.ink;c.fillText(o.n,o.x,o.y+18*sc)}
+  }));
+  /* набросок */
+  if(fs&&on){
+    const L=fs.k==='svc'?look('svc',{t:fs.extra.t}):K[fs.k];
+    if(fs.mode==='r'){
+      const a=fs.a,b=fs.b;c.globalAlpha=.6;c.fillStyle=L.col;c.fillRect(Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.abs(b[0]-a[0]),Math.abs(b[1]-a[1]));c.globalAlpha=1;
+    }else{
+      const q=fs.pts.concat([mouse]);pth(q);c.globalAlpha=.45;c.fillStyle=L.col;c.fill();c.globalAlpha=1;line(q,2.5,'#0c8a86',[8,6]);
+      c.beginPath();c.arc(fs.pts[0][0],fs.pts[0][1],5,0,7);c.fillStyle='#0c8a86';c.fill();
+    }
+  }
+});
+City.HINT.depot='Прямоугольник: нажмите или протяните. Контур: ставьте точки, первая точка или «Готово» — закончить.';
+City.HINT.port=City.HINT.depot;City.HINT.svc=City.HINT.depot;
+})();
+</script>
 </body>
 </html>
