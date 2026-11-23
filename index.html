@@ -1115,7 +1115,7 @@ const seg=(tr,d)=>{let i=1;while(i<tr.c.length-1&&tr.c[i]<d)i++;return i};
 
 /* ---------- состояние автобусов ---------- */
 const BS=new WeakMap();
-City.busLeg=b=>{const s=BS.get(b);return s&&s.run&&!s.park?s.leg:0};
+City.busLeg=b=>{const s=BS.get(b);return s&&s.run&&!s.park?s.leg:0};City.busState=b=>BS.get(b);
 
 const getSt=b=>{let s=BS.get(b);if(!s){s={run:false,leg:0,d:0,v:0,dw:0,si:1,fin:false,tr:null,x:0,y:0,an:undefined};BS.set(b,s)}return s};
 function place(st,dt){
@@ -1149,7 +1149,7 @@ function step(en,dt,all){
     return;
   }
   const m=City.busKit.MODELS[en.b.m]||{l:12},L=m.l*City.bu(),W=2.55*City.bu();
-  if(st.dw>0){st.dw-=dt;st.v=0;if(st.dw<=0&&st.fin)endTrip(st,T);return}
+  if(st.dw>0){if(!(City.holdBus&&City.holdBus(en.b)))st.dw-=dt;st.v=0;if(st.dw<=0&&st.fin)endTrip(st,T);return}
   const i=seg(tr,st.d),vmax=KMH[tr.ty[i-1]]*.85/3.6*4/mpu(),nx=tr.stops[st.si];let tv=vmax,lim=1e9;
   if(nx){const rem=nx.s-st.d;
     if(rem<=.6){st.d=nx.s;st.v=0;st.dw=DW*(.7+Math.random()*.6);st.si++;if(st.si>=tr.stops.length)st.fin=true;place(st,0);return}
@@ -3785,6 +3785,8 @@ $('#tvr').onclick=e=>{run=!run;e.currentTarget.classList.toggle('on',run)};
 /* транспорт из 2D-симуляции */
 const veh=new Map(),eye=1.7*u,skyN=new TH.Color('#0b1226'),skyD=new TH.Color('#8ec5f0'),skyB=new TH.Color('#8a949c'),sk=new TH.Color();
 let last=Date.now(),hAt=0;
+const API={cam,scene,veh,u,tv,blk,pos:(x,z)=>{px=x;pz=z},get:()=>({x:px,z:pz,yaw,pit}),setYaw:v=>{yaw=v},setPit:v=>{pit=v}};
+if(City.trip&&City.trip.start)City.trip.start(API);
 function frame(){
  T.raf=requestAnimationFrame(frame);
  const n=Date.now(),dt=Math.min(.1,(n-last)/1000);last=n;
@@ -3793,7 +3795,7 @@ function frame(){
  let f=(k('KeyW')||k('ArrowUp')?1:0)-(k('KeyS')||k('ArrowDown')?1:0)-jy,r=(k('KeyD')?1:0)-(k('KeyA')?1:0)+jx;
  const l=Math.hypot(f,r);if(l>1){f/=l;r/=l}
  const sp=(run||k('ShiftLeft')||k('ShiftRight')?15:5)*u*dt,s=Math.sin(yaw),c=Math.cos(yaw),mx=(-s*f+c*r)*sp,mz=(-c*f-s*r)*sp;
- if(!blk(px+mx,pz))px+=mx;if(!blk(px,pz+mz))pz+=mz;
+ if(!(City.trip&&City.trip.move&&City.trip.move(f,r,dt,run||k('ShiftLeft')||k('ShiftRight')))){if(!blk(px+mx,pz))px+=mx;if(!blk(px,pz+mz))pz+=mz}
  if(l>.05)bob+=dt*9*(run?1.6:1);
  cam.position.set(px,eye+Math.sin(bob)*.06*u,pz);cam.rotation.set(pit,yaw,0);
  /* небо, свет, погода */
@@ -3820,10 +3822,11 @@ function frame(){
   const hd=((-yaw*180/Math.PI)%360+360)%360,mm=Math.floor(h*60)%60;
   hud.textContent=DIRS[Math.round(hd/45)%8]+' · '+(st||'—')+' · '+String(Math.floor(h)).padStart(2,'0')+':'+String(mm).padStart(2,'0')}
  if(City.bus3d)City.bus3d.frame();
+if(City.trip&&City.trip.tick)City.trip.tick(dt);
 renderer.render(scene,cam);
 }
 function exit(){
- if(!T)return;cancelAnimationFrame(T.raf);removeEventListener('keydown',kd,true);removeEventListener('keyup',ku,true);removeEventListener('resize',rs);
+ if(!T)return;if(City.trip&&City.trip.stop)City.trip.stop();cancelAnimationFrame(T.raf);removeEventListener('keydown',kd,true);removeEventListener('keyup',ku,true);removeEventListener('resize',rs);
  scene.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material)[].concat(o.material).forEach(m=>m.dispose())});
  renderer.dispose();tv.remove();T=null;City.redraw();
 }
@@ -3831,107 +3834,206 @@ frame();
 }
 })();
 </script>
-<!-- ===== Плагин: салон ПАЗ-320415-04 («Войти / E», сиденья, табло с остановкой).
-     Вставить В САМЫЙ КОНЕЦ, перед </body>, ПОСЛЕ плагина «Путешествие».
-     Плюс 3 правки в плагине «Путешествие» (см. сообщение в чате). ===== -->
 <script>
+/* ===== Плагин: салон ПАЗ-320415-04 в «Путешествии».
+   Вставить В САМЫЙ КОНЕЦ, перед </body> (после плагина «Путешествие»).
+   Нужны 6 мелких правок в старых плагинах — см. инструкцию в чате.
+   Управление: E — войти/выйти, F — сесть/встать, WASD — ходить, мышь/стрелки — смотреть. ===== */
 (function(){
-const FL=.5,clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const SEATS=[];
-[-2.07,-1.27,-.45,.37,1.17,1.99].forEach(x=>[-.92,-.49].forEach(z=>SEATS.push([x,z])));
-[-2.07,-1.27,-.45,.37,1.17].forEach(x=>[.49,.92].forEach(z=>SEATS.push([x,z])));
-SEATS.push([3.15,.93]);
-let R=null,I=null,LED=null,bE=null,bF=null,fe=0,ff=0,pE=false,pF=false;const spd=new Map();
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const FLOOR=.7,EYE_STAND=FLOOR+1.62,EYE_SIT=FLOOR+1.2;
+const LED_DIR=1;            /* 1 — строка бежит слева направо, -1 — справа налево */
+const HOLD_MAX=30;          /* сколько секунд автобус ждёт у остановки, пока вы у двери */
+let API=null,R=null,hold=null,holdT=0,act1=null,act2=null,b1=null,b2=null;
 
-function build(TH){
- const g=new TH.Group(),M=c=>new TH.MeshLambertMaterial({color:c,side:TH.DoubleSide,emissive:c,emissiveIntensity:.18});
- const wall=M('#c7ccd0'),ceil=M('#e6e9eb'),floor=M('#5f656a'),seat=M('#9ba3aa'),dark=M('#26292c'),yel=M('#f0c000');
- const box=new TH.BoxGeometry(1,1,1),cyl=new TH.CylinderGeometry(.022,.022,1,6);
- const bx=(m,x0,x1,y0,y1,z0,z1)=>{const o=new TH.Mesh(box,m);o.scale.set(x1-x0,y1-y0,z1-z0);o.position.set((x0+x1)/2,(y0+y1)/2,(z0+z1)/2);g.add(o)};
- const rod=(x,y,z,len,h)=>{const o=new TH.Mesh(cyl,yel);o.scale.y=len;o.position.set(x,y,z);if(h)o.rotation.z=Math.PI/2;g.add(o)};
- /* борта: окна между стойками, справа — проём двери (x 1.7…2.5) */
- [-1,1].forEach(s=>{
-  const z0=s>0?1.17:-1.25,z1=s>0?1.25:-1.17;
-  if(s>0){bx(wall,-4.1,1.7,FL,1.15,z0,z1);bx(wall,2.5,4.1,FL,1.15,z0,z1)}else bx(wall,-4.1,4.1,FL,1.15,z0,z1);
-  bx(wall,-4.1,4.1,2.2,2.8,z0,z1);
-  (s>0?[-3.6,-2.4,-1.2,0,1.2,1.7,2.5,3.4]:[-3.6,-2.4,-1.2,0,1.2,2.4,3.4]).forEach(x=>bx(wall,x-.05,x+.05,FL,2.8,z0,z1));
- });
- bx(floor,-4.2,4.2,.4,.5,-1.25,1.25);bx(ceil,-4.2,4.2,2.8,2.85,-1.25,1.25);
- bx(wall,-4.3,-4.2,FL,2.85,-1.25,1.25);                       /* зад */
- bx(wall,4.1,4.2,FL,1.3,-1.25,1.25);bx(wall,4.1,4.2,2.3,2.85,-1.25,1.25);   /* перед: лобовое открыто */
- bx(wall,4.05,4.2,FL,2.85,1.1,1.25);bx(wall,4.05,4.2,FL,2.85,-1.25,-1.1);
- bx(dark,3.7,4.1,FL,1.1,-1.2,.1);bx(dark,3.4,3.8,FL+.1,1.0,-.95,-.55);bx(wall,3.15,3.2,FL,2.3,-1.2,-.1);  /* кабина */
- SEATS.forEach(([x,z])=>{
-  bx(seat,x-.3,x+.18,FL+.38,FL+.46,z-.21,z+.21);bx(seat,x-.32,x-.24,FL+.46,FL+1,z-.21,z+.21);
-  bx(dark,x-.33,x-.22,FL+.98,FL+1.04,z-.19,z+.19);bx(dark,x-.25,x+.1,FL,FL+.38,z-.04,z+.04)});
- [-.42,.42].forEach(z=>rod(0,2.55,z,8,1));
- [-1.6,-.8,0,.8,1.6].forEach(x=>[-.3,.3].forEach(z=>rod(x,(FL+2.55)/2,z,2.05)));
- /* табло */
- const c=document.createElement('canvas');c.width=512;c.height=96;const t=new TH.CanvasTexture(c);
- const p=new TH.Mesh(new TH.PlaneGeometry(1,.19),new TH.MeshBasicMaterial({map:t}));p.position.set(4.06,2.52,0);p.rotation.y=-Math.PI/2;g.add(p);
- LED={c,t};return g;
+/* ---------- сиденья (метры, ось x — к кабине, z>0 — правый борт с дверью) ---------- */
+const SEATS=[];
+for(let i=0;i<6;i++)[-.94,-.54].forEach(z=>SEATS.push({x:-2.75+i*.78,z}));
+for(let i=0;i<5;i++)[.54,.94].forEach(z=>SEATS.push({x:-2.6+i*.78,z}));
+SEATS.push({x:2.65,z:.94});
+const DRV={x:3.1,z:-.75};
+
+function hit(x,z){
+  const r=.17;
+  if(x<-4.05||x>2.95||z<-1||z>1)return true;
+  if(x>2.5&&z<-.28)return true;
+  return SEATS.some(s=>Math.abs(x-s.x)<.27+r&&Math.abs(z-s.z)<.21+r);
 }
-function ui(tv){
- if(bE&&bE.isConnected)return;
- tv.insertAdjacentHTML('beforeend','<div style="position:absolute;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));display:flex;gap:8px"><button id="rde" class="b fl" hidden style="position:static"></button><button id="rdf" class="b fl" hidden style="position:static"></button></div>');
- bE=document.getElementById('rde');bF=document.getElementById('rdf');bE.onclick=()=>fe=1;bF.onclick=()=>ff=1;
+
+/* ---------- модель салона ---------- */
+function build(){
+  const TH=THREE,I=new TH.Group(),mats=[];
+  const mt=(c,e)=>{const m=new TH.MeshLambertMaterial({color:c,emissive:new TH.Color(c).multiplyScalar(e===undefined?.4:e)});mats.push(m);return m};
+  const box=(w,h,d,x,y,z,m,par)=>{const o=new TH.Mesh(new TH.BoxGeometry(w,h,d),m);o.position.set(x,y,z);(par||I).add(o);return o};
+  const cylV=(r,h,x,y0,z,m)=>{const o=new TH.Mesh(new TH.CylinderGeometry(r,r,h,8),m);o.position.set(x,y0+h/2,z);I.add(o)};
+  const cylX=(r,len,x0,y,z,m)=>{const g=new TH.CylinderGeometry(r,r,len,8);g.rotateZ(Math.PI/2);const o=new TH.Mesh(g,m);o.position.set(x0+len/2,y,z);I.add(o)};
+  const wall=mt('#c9ced2'),low=mt('#aeb4b9'),ceil=mt('#dfe3e6',.5),floor=mt('#4c545c',.35),dark=mt('#2c3136',.2),
+    seatM=mt('#8e949a'),seatD=mt('#6f757b'),back=mt('#a3a9ae'),blk=mt('#1a1c1e',.1),yel=mt('#e6b800',.5),blue=mt('#2e7fd9',.4),
+    door=mt('#b9bfc4'),skin=mt('#e0b896'),shirt=mt('#33506e');
+  const glass=new TH.MeshLambertMaterial({color:'#8fb4cc',transparent:true,opacity:.3,side:TH.DoubleSide});mats.push(glass);
+  const lamp=new TH.MeshBasicMaterial({color:'#f4f6f8'});mats.push(lamp);
+  /* пол, потолок, торцы */
+  box(8.6,.04,2.4,0,.68,0,floor);
+  box(8.6,.04,2.4,0,2.88,0,ceil);
+  box(.9,.03,.7,.3,2.855,0,dark);
+  [-.35,.35].forEach(z=>box(8,.02,.12,-.2,2.855,z,lamp));
+  box(.05,2.2,2.4,-4.3,1.8,0,wall);
+  box(.06,.7,2.4,4.3,2.55,0,ceil);
+  [-1,1].forEach(s=>box(.06,1,.1,4.3,1.7,s*1.12,wall));
+  /* борта с окнами */
+  [-1,1].forEach(s=>{
+    const z=s*1.17;
+    box(8.6,.7,.05,0,2.55,z,ceil);
+    if(s<0)box(8.6,.5,.05,0,.95,z,low);
+    else{box(5.6,.5,.05,-1.5,.95,z,low);box(2,.5,.05,3.3,.95,z,low)}
+    for(let i=0;i<9;i++){const x=-4+i;if(s>0&&x>1.2&&x<2.4)continue;box(.1,1,.06,x,1.7,z,wall)}
+  });
+  box(.08,1.6,.08,1.3,1.5,1.17,wall);box(.08,1.6,.08,2.3,1.5,1.17,wall);
+  /* двери */
+  const doors=[];
+  [[1.3,1],[2.3,-1]].forEach(([px,d])=>{const g=new TH.Group();g.position.set(px,0,1.17);I.add(g);
+    box(.5,1.6,.04,d*.25,1.5,0,door,g);box(.4,1,.045,d*.25,1.65,0,glass,g);doors.push(g)});
+  /* кабина */
+  box(.5,.5,1.15,4.05,.95,-.62,dark);box(.3,.5,1.15,4.15,.95,.62,dark);box(.9,.6,.7,3.55,1,.05,dark);
+  const wh=new TH.Mesh(new TH.TorusGeometry(.16,.02,8,16),blk);wh.position.set(3.82,1.32,DRV.z);wh.rotation.set(0,Math.PI/2,-.5);I.add(wh);
+  /* сиденья */
+  const seat=(x,z)=>{
+    box(.44,.08,.4,x,FLOOR+.45,z,seatM);box(.4,.4,.36,x,FLOOR+.2,z,seatD);
+    box(.07,.55,.4,x-.2,FLOOR+.75,z,back);box(.05,.04,.34,x-.2,FLOOR+1.05,z,blk);
+  };
+  SEATS.forEach(s=>seat(s.x,s.z));seat(DRV.x,DRV.z);
+  box(.28,.5,.4,DRV.x-.05,FLOOR+.95,DRV.z,shirt);
+  const hd=new TH.Mesh(new TH.SphereGeometry(.11,10,8),skin);hd.position.set(DRV.x-.05,FLOOR+1.42,DRV.z);I.add(hd);
+  /* поручни и валидаторы */
+  cylX(.022,6.6,-4.1,2.55,-.62,yel);cylX(.022,6.6,-4.1,2.55,.62,yel);
+  [[-2.35,-.37],[-2.35,.37],[-.8,-.37],[-.8,.37],[.75,-.37],[.75,.37],[1.3,1.05],[2.3,1.05]].forEach(p=>cylV(.022,1.85,p[0],FLOOR,p[1],yel));
+  cylX(.02,1.2,1.5,1.25,-.4,yel);
+  box(.1,.16,.1,1.3,1.5,.97,blue);box(.1,.16,.1,.75,1.55,.3,blue);
+  /* табло */
+  box(.76,.14,.07,4,2.6,0,blk);
+  const lc=document.createElement('canvas');lc.width=512;lc.height=64;
+  const lt=new TH.CanvasTexture(lc),lm=new TH.Mesh(new TH.PlaneGeometry(.7,.0875),new TH.MeshBasicMaterial({map:lt}));
+  lm.position.set(3.955,2.6,0);lm.rotation.y=-Math.PI/2;I.add(lm);
+  return{I,lc,lt,doors,mats};
 }
-const ok=(x,z)=>x>-3.8&&x<3&&Math.abs(z)<1&&!SEATS.some(s=>x>s[0]-.4&&x<s[0]+.26&&Math.abs(z-s[1])<.29);
-const nearSeat=()=>{let b=null,d0=1.15;SEATS.forEach(s=>{const d=Math.hypot(R.lx-s[0],R.lz-s[1]);if(d<d0){d0=d;b=s}});return b};
-function stop(){
- if(!R)return;const v=R.v;
- if(v){v.m.remove(I);v.m.children.forEach(ch=>ch.visible=true)}
- R.cam.near=.5;R.cam.updateProjectionMatrix();R=I=LED=null;
+function dispose(b){b.I.traverse(o=>{if(o.geometry)o.geometry.dispose()});b.mats.forEach(m=>m.dispose());b.lt.dispose()}
+
+/* ---------- табло ---------- */
+function ledText(){
+  const st=City.busState&&City.busState(R.ref);if(!st||!st.tr)return 'ПАЗ';
+  const tr=st.tr,at=!st.park&&st.dw>0;
+  const s=st.park?tr.stops[0]:at?tr.stops[Math.max(0,st.si-1)]:tr.stops[Math.min(st.si,tr.stops.length-1)];
+  const z=s&&City.S.stops.find(x=>x.id===s.id),m=/^\s*(\d+[A-Za-zА-Яа-я]?)/.exec((R.route&&R.route.n)||'');
+  return (m?m[1]+'   ':'')+(at||st.park?'Остановка: ':'Следующая: ')+(z?z.n:'—')+'        ';
 }
-function frame(c){
- const{TH,cam,veh,u,key,dt,A,hud,tv}=c;ui(tv);
- const e=key('KeyE'),f=key('KeyF'),pe=(e&&!pE)||fe,pf=(f&&!pF)||ff;pE=e;pF=f;fe=ff=0;
- const vis=(City.vis()||[]).filter(q=>q.k==='bus'&&City.bus3d&&City.bus3d.has(q.ref.m));
- vis.forEach(q=>{let s=spd.get(q.ref);if(!s){s={x:q.x,y:q.y,v:9};spd.set(q.ref,s)}
-  if(dt>0)s.v+=(Math.hypot(q.x-s.x,q.y-s.y)/dt/u-s.v)*Math.min(1,dt*6);s.x=q.x;s.y=q.y});
- /* ---- снаружи: ищем автобус у двери ---- */
- if(!R){
-  bF.hidden=true;let hit=null;
-  vis.forEach(q=>{const v=veh.get(q.ref);if(!v||!v.b3||spd.get(q.ref).v>1.5)return;
-   const a=-v.m.rotation.y,ca=Math.cos(a),sa=Math.sin(a),dx=A.px-q.x,dz=A.pz-q.y,lx=(dx*ca+dz*sa)/u,lz=(-dx*sa+dz*ca)/u;
-   if(Math.abs(lx)<5.5&&lz>.8&&lz<3.8)hit={q,v}});
-  bE.hidden=!hit;if(!hit)return;
-  bE.textContent='Войти / E';
-  if(pe){
-   const{q,v}=hit;v.m.children.forEach(ch=>ch.visible=false);I=build(TH);v.m.add(I);I.visible=true;
-   R={ref:q.ref,v,cam,lx:2.1,lz:.7,sit:null,cur:''};A.yaw=0;A.pit=0;cam.near=.05;cam.updateProjectionMatrix();bE.hidden=true}
-  return;
- }
- /* ---- внутри ---- */
- const q=vis.find(x=>x.ref===R.ref),v=veh.get(R.ref);
- if(!q||!v){stop();return}
- const a=-v.m.rotation.y,ca=Math.cos(a),sa=Math.sin(a),ly=A.yaw,moving=spd.get(R.ref).v>1.5;
- const fw=c.f,rt=c.r;
- if(R.sit){if(Math.abs(fw)>.3||Math.abs(rt)>.3)stand()}
- else{const sp=(c.run?3.2:1.7)*dt,mx=(Math.cos(ly)*fw+Math.sin(ly)*rt)*sp,mz=(-Math.sin(ly)*fw+Math.cos(ly)*rt)*sp;
-  if(ok(R.lx+mx,R.lz))R.lx+=mx;if(ok(R.lx,R.lz+mz))R.lz+=mz}
- function stand(){const s=R.sit;R.sit=null;R.lx=Math.min(s[0],2.9);R.lz=s[1]<0?-.1:.1}
- /* кнопки */
- const ns=R.sit?null:nearSeat(),nearDoor=!R.sit&&R.lx>1.2&&R.lx<2.9&&Math.abs(R.lz)<.5;
- bE.hidden=!(nearDoor&&!moving);bE.textContent='Выйти / E';
- bF.hidden=!(R.sit||ns);bF.textContent=R.sit?'Встать / F':'Сесть / F';
- if(pf){if(R.sit)stand();else if(ns){R.sit=ns;R.lx=ns[0];R.lz=ns[1]}}
- if(pe&&nearDoor&&!moving){
-  const x=2.1,z=2.9;A.px=q.x+x*u*ca-z*u*sa;A.pz=q.y+x*u*sa+z*u*ca;A.yaw=-a-Math.PI;A.pit=0;stop();return}
- /* камера: внутри автобуса, мир за окнами едет сам */
- const eye=FL+(R.sit?.88:1.65),ox=R.lx*u,oz=R.lz*u;
- cam.position.set(v.m.position.x+ox*ca-oz*sa,.3+eye*u,v.m.position.z+ox*sa+oz*ca);
- cam.rotation.set(A.pit,-a-Math.PI/2+ly,0);
- /* текущая остановка */
- const R0=q.R,ids=(R0&&R0.s)||[];let bd=1e9,bn='';
- ids.forEach(id=>{const s=City.S.stops.find(x=>x.id===id);if(!s)return;const d=Math.hypot(s.x-q.x,s.y-q.y);if(d<bd){bd=d;bn=s.n}});
- if(bn&&(bd<30||!R.cur))R.cur=bn;
- const g=LED.c.getContext('2d'),W=512,H=96,t='Остановка: '+(R.cur||'—');
- g.fillStyle='#120606';g.fillRect(0,0,W,H);g.font='700 56px Manrope,Arial,sans-serif';g.textBaseline='middle';g.fillStyle='#ff3b30';
- const tw=g.measureText(t).width;g.fillText(t,((Date.now()/1000*90)%(W+tw))-tw,H/2+3);LED.t.needsUpdate=true;
- hud.textContent='Салон · '+(R.cur||'—')+(R.sit?' · сидите':'')+(moving?' · едем':' · стоим');
+function led(t){
+  const c=R.b.lc,g=c.getContext('2d'),W=512,H=64;
+  g.fillStyle='#140505';g.fillRect(0,0,W,H);
+  g.font='700 46px Manrope,Arial,sans-serif';g.textBaseline='middle';g.fillStyle='#ff3a22';
+  const s=ledText(),tw=g.measureText(s).width,k=(t*90)%(W+tw),x=LED_DIR>0?k-tw:W-k;
+  g.fillText(s,x,H/2+2);
+  g.fillStyle='rgba(0,0,0,.65)';
+  for(let i=0;i<W;i+=4)g.fillRect(i,0,1.4,H);
+  for(let j=0;j<H;j+=4)g.fillRect(0,j,W,1.4);
+  R.b.lt.needsUpdate=true;
 }
-City.ride={get on(){return !!R},frame,stop};
+
+/* ---------- посадка / выход / сиденья ---------- */
+function board(c){
+  const g=c.g,b=build(),hid=[];
+  g.add(b.I);
+  g.children.forEach(o=>{if(o.geometry&&o.geometry.type==='CylinderGeometry'){o.visible=false;hid.push(o)}});
+  const P=API.get();
+  R={ref:c.ref,route:c.route,g,b,hid,x:1.8,z:.75,k:0,sit:null,sx:0,sz:0,do:0,gone:0,t:0,ledAt:0,from:{x:P.x,z:P.z}};
+  API.setYaw(-Math.PI/2);API.setPit(0);API.cam.near=.1;API.cam.updateProjectionMatrix();
+}
+function leave(forced){
+  if(!R)return;const g=R.g,TH=THREE;g.updateMatrixWorld(true);
+  let spot=null;
+  for(const dz of [2.2,3.2,4.5,1.6]){const v=g.localToWorld(new TH.Vector3(1.8,0,1.2+dz));if(!API.blk(v.x,v.z)){spot=v;break}}
+  if(!spot)spot=new TH.Vector3(R.from.x,0,R.from.z);
+  API.pos(spot.x,spot.z);API.setYaw(g.rotation.y+Math.PI);API.setPit(0);
+  clean();
+}
+function clean(){
+  if(!R)return;
+  try{R.g.remove(R.b.I);dispose(R.b);R.hid.forEach(o=>o.visible=true)}catch(e){}
+  if(API){API.cam.near=.5;API.cam.updateProjectionMatrix()}
+  R=null;hold=null;holdT=0;
+}
+function sitOn(s){R.sit=s;R.sx=R.x;R.sz=R.z;R.dir=1}
+function standUp(){R.dir=-1;R.x=R.sx=R.sit.x;R.z=R.sz=R.sit.z<0?-.12:.12}
+
+/* ---------- ввод ---------- */
+function move(f,r,dt,run){
+  if(!R)return false;if(R.sit)return true;
+  const y=API.get().yaw,s=Math.sin(y),c=Math.cos(y),sp=(run?2.6:1.3)*dt,mx=(-s*f+c*r)*sp,mz=(-c*f-s*r)*sp;
+  if(!hit(R.x+mx,R.z))R.x+=mx;if(!hit(R.x,R.z+mz))R.z+=mz;
+  return true;
+}
+addEventListener('keydown',e=>{
+  if(!API||e.repeat||e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName))return;
+  if(e.code==='KeyE'&&act1)act1.fn();else if(e.code==='KeyF'&&act2)act2.fn();
+},true);
+const setBtn=(el,a)=>{el.hidden=!a;if(a)el.textContent=a.label};
+
+/* ---------- кадр ---------- */
+function tick(dt){
+  if(!API)return;
+  const TH=THREE,P=API.get();let a1=null,a2=null,want=null;
+  if(!R){
+    let best=null;
+    (City.vis()||[]).forEach(q=>{
+      if(q.k!=='bus'||!City.bus3d||!City.bus3d.has(q.ref.m))return;
+      const v=API.veh.get(q.ref),st=City.busState&&City.busState(q.ref);
+      if(!v||!v.m.visible||!st||!st.run||!(st.park||st.dw>0)||st.v>.3)return;
+      v.m.updateMatrixWorld(true);
+      const l=v.m.worldToLocal(new TH.Vector3(P.x,v.m.position.y+1,P.z)),d=Math.hypot(Math.max(Math.abs(l.x)-4.4,0),Math.max(Math.abs(l.z)-1.25,0));
+      if(d<4.5&&(!best||d<best.d))best={d,ref:q.ref,g:v.m,route:q.R};
+    });
+    if(best){want=best.ref;const c=best;a1={label:'Войти (E)',fn:()=>board(c)}}
+  }else{
+    const g=R.g;R.t+=dt;
+    if(!g.visible){if(++R.gone>30){leave(true);return}}else R.gone=0;
+    g.updateMatrixWorld(true);
+    const st=City.busState&&City.busState(R.ref),stopped=!!st&&(st.park||st.dw>0)&&st.v<.3;
+    /* сиденье: плавный переход */
+    if(R.sit){R.k=clamp(R.k+R.dir*dt*2.2,0,1);if(R.dir<0&&R.k<=0){R.sit=null;R.k=0}}
+    const e=R.k*R.k*(3-2*R.k);let px=R.x,pz=R.z,py=EYE_STAND;
+    if(R.sit){px=R.sx+(R.sit.x+.02-R.sx)*e;pz=R.sz+(R.sit.z-R.sz)*e;py=EYE_STAND+(EYE_SIT-EYE_STAND)*e}
+    /* двери */
+    R.do=clamp(R.do+(stopped?1:-1)*dt*2,0,1);R.b.doors.forEach(d=>d.scale.x=1-.88*R.do);
+    /* камера */
+    const mv=st&&st.v>.5?1:.25,sh=(Math.sin(R.t*17)*.004+Math.sin(R.t*9.3)*.003)*mv;
+    const v=new TH.Vector3(px,py+sh,pz);g.localToWorld(v);
+    API.cam.position.copy(v);
+    API.cam.quaternion.copy(g.quaternion).multiply(new TH.Quaternion().setFromEuler(new TH.Euler(P.pit,P.yaw,0,'YXZ')));
+    API.pos(v.x,v.z);
+    /* табло */
+    if(R.t-R.ledAt>.04){R.ledAt=R.t;led(R.t)}
+    /* кнопки */
+    const nearDoor=!R.sit&&Math.hypot(R.x-1.8,R.z-.9)<1.1;
+    if(stopped&&nearDoor){a1={label:'Выйти (E)',fn:()=>leave(false)};want=R.ref}
+    if(R.sit)a2={label:'Встать (F)',fn:standUp};
+    else{let b=null,bd=1.1;SEATS.forEach(s=>{const d=Math.hypot(R.x-s.x,R.z-s.z);if(d<bd){bd=d;b=s}});if(b)a2={label:'Сесть (F)',fn:()=>sitOn(b)}}
+  }
+  /* удержание автобуса у остановки */
+  if(want){holdT+=dt;hold=holdT<HOLD_MAX?want:null}else{holdT=0;hold=null}
+  act1=a1;act2=a2;setBtn(b1,a1);setBtn(b2,a2);
+}
+
+/* ---------- связь со старыми плагинами ---------- */
+City.holdBus=b=>hold!==null&&hold===b;
+City.trip={
+  start(api){
+    API=api;
+    api.tv.insertAdjacentHTML('beforeend','<div style="position:absolute;left:50%;transform:translateX(-50%);bottom:calc(24px + env(safe-area-inset-bottom,0px));display:flex;gap:8px"><button class="b p" id="tb1" hidden style="padding:12px 18px;font-size:15px;border-radius:12px;box-shadow:0 4px 18px #0004"></button><button class="b p" id="tb2" hidden style="padding:12px 18px;font-size:15px;border-radius:12px;box-shadow:0 4px 18px #0004"></button></div>');
+    b1=$('#tb1');b2=$('#tb2');
+    b1.onclick=()=>act1&&act1.fn();b2.onclick=()=>act2&&act2.fn();
+  },
+  stop(){clean();API=null;act1=act2=null},
+  move,tick
+};
 })();
 </script>
 </body>
