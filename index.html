@@ -150,7 +150,7 @@ function finish(){
   }
   if(tool==='road'&&c.pts.length>1)add('roads',{pts:c.pts,t:tt,n:RN[tt]+' '+(S.roads.length+1),ow:tt===0});
   else if(tool==='dist'&&c.pts.length>2)add('dists',{pts:c.pts,c:DC[S.dists.length%6],n:'Район '+(S.dists.length+1)});
-  else if(tool==='route'&&c.s.length>1)add('routes',{n:'Маршрут '+(S.routes.length+1),c:RC[S.routes.length%6],s:c.s,loop:!!c.loop,d:S.depots[0]?S.depots[0].id:null});
+  else if(tool==='route'&&c.s.length>1)add('routes',{n:(S.routes.length+1)+' '+((stopById(c.s[0])||{}).n||'')+(c.loop?' (кольцо)':' — '+((stopById(c.s[c.s.length-1])||{}).n||'')),c:RC[S.routes.length%6],s:c.s,loop:!!c.loop,d:S.depots[0]?S.depots[0].id:null});
   updateUI();dirty=true;
 }
 $('#fok').onclick=finish;$('#fno').onclick=()=>{cur=null;updateUI();dirty=true};
@@ -238,7 +238,7 @@ function updateUI(){
   if(cur)$('#fcnt').textContent=(cur.pts?'Точек: '+cur.pts.length:'Остановок: '+cur.s.length);
   if(!sel||cur)return;
   const{k,o}=sel;
-  let h=`<h3>${KN[k]}</h3><label>Название<input id="f-n" value="${esc(o.n)}" placeholder="${k==='blds'?'Без названия':''}"></label>`;
+  let h=`<h3>${KN[k]}</h3><label>${k==='routes'?'Номер и конечные':'Название'}<input id="f-n" value="${esc(o.n)}" placeholder="${k==='blds'?'Без названия':k==='routes'?'60 Придонской — Боровое':''}"></label>`;
   if(k==='roads')h+=`<label>Тип<select id="f-t">${ROAD.map((r,i)=>`<option value="${i}" ${o.t===i?'selected':''}>${r}</option>`).join('')}</select></label><label>Движение<select id="f-ow"><option value="0" ${o.ow?'':'selected'}>Двустороннее</option><option value="1" ${o.ow?'selected':''}>Одностороннее</option></select></label>${o.ow?'<button id="f-rev" class="b">Развернуть направление</button>':''}<button id="f-ext" class="b">Продлить улицу</button>`;
   if(k==='blds')h+=`<label>Тип<select id="f-t">${Object.entries(BLD).map(([a,b])=>`<option value="${a}" ${o.t===a?'selected':''}>${b[0]}</option>`).join('')}</select></label>`;
   if(k==='routes')h+=`<label>АТП<select id="f-dp"><option value="">Не выбран</option>${S.depots.map(d=>`<option value="${d.id}" ${o.d===d.id?'selected':''}>${esc(d.n)}</option>`).join('')}</select></label><label>Цвет${sw(RC,o.c)}</label>`;
@@ -1115,6 +1115,8 @@ const seg=(tr,d)=>{let i=1;while(i<tr.c.length-1&&tr.c[i]<d)i++;return i};
 
 /* ---------- состояние автобусов ---------- */
 const BS=new WeakMap();
+City.busLeg=b=>{const s=BS.get(b);return s&&s.run&&!s.park?s.leg:0};
+
 const getSt=b=>{let s=BS.get(b);if(!s){s={run:false,leg:0,d:0,v:0,dw:0,si:1,fin:false,tr:null,x:0,y:0,an:undefined};BS.set(b,s)}return s};
 function place(st,dt){
   const tr=st.tr,i=seg(tr,st.d),a=tr.pts[i-1],b=tr.pts[i],l=(tr.c[i]-tr.c[i-1])||1,t=clamp((st.d-tr.c[i-1])/l,0,1);
@@ -3551,6 +3553,89 @@ City.HINT.port=City.HINT.depot;City.HINT.svc=City.HINT.depot;
 })();
 </script>
 <script>
+/* Плагин: 3D-автобус ПАЗ-320415-04 с табло (номер слева, бегущий текст слева направо) */
+(function(){
+const MODEL='ПАЗ-320415-04 Вектор Next';
+const PHOTO={front:'paz_front.webp',doors:'paz_side_doors.webp',left:'paz_side.webp',rear:'paz_rear.webp'};
+/* кроп фото: [x0,x1,y0,y1] в долях снимка */
+const CROP={front:[.417,.683,.40,.8625],doors:[.09,.915,.419,.792],left:[.09,.933,.40,.806],rear:[.4875,.733,.4475,.875]};
+let TH=null,M=null,GEO=null;const B=new Map();
+
+function mats(){
+  if(M)return M;
+  const ph=k=>{const m=new TH.MeshLambertMaterial({color:'#f2f4f5'});
+    new TH.TextureLoader().load(PHOTO[k],t=>{const c=CROP[k];t.repeat.set(c[1]-c[0],c[3]-c[2]);t.offset.set(c[0],1-c[3]);m.map=t;m.color.set('#fff');m.needsUpdate=true},undefined,()=>{});return m};
+  /* порядок граней BoxGeometry: +x перед, -x зад, +y крыша, -y низ, +z правый (двери), -z левый */
+  return M={body:[ph('front'),ph('rear'),new TH.MeshLambertMaterial({color:'#e9edef'}),new TH.MeshLambertMaterial({color:'#222'}),ph('doors'),ph('left')],
+    wheel:new TH.MeshLambertMaterial({color:'#17191b'}),hub:new TH.MeshLambertMaterial({color:'#9aa0a4'}),ac:new TH.MeshLambertMaterial({color:'#f6f7f8'})};
+}
+function geo(){
+  if(GEO)return GEO;
+  const w=new TH.CylinderGeometry(.46,.46,.32,18);w.rotateX(Math.PI/2);
+  const h=new TH.CylinderGeometry(.25,.25,.34,12);h.rotateX(Math.PI/2);
+  return GEO={body:new TH.BoxGeometry(8.8,2.65,2.5),w,h,ac:new TH.BoxGeometry(2.07,.28,1.6)};
+}
+/* единицы модели — метры; группу масштабируют на City.bu() */
+function make(T){
+  TH=T;const g=new TH.Group(),m=mats(),G=geo();
+  const body=new TH.Mesh(G.body,m.body);body.position.y=.3+1.325;g.add(body);
+  const ac=new TH.Mesh(G.ac,m.ac);ac.position.set(-.2,2.95+.14,0);g.add(ac);
+  [[3.23,1.1],[3.23,-1.1],[-1.73,1.1],[-1.73,-1.1]].forEach(([x,z])=>{
+    const a=new TH.Mesh(G.w,m.wheel);a.position.set(x,.46,z);g.add(a);
+    const b=new TH.Mesh(G.h,m.hub);b.position.set(x,.46,z+(z>0?.02:-.02));g.add(b)});
+  const pl=(w,h,x,y,z,ry)=>{const mt=new TH.MeshBasicMaterial({color:'#2b2e31'});
+    const p=new TH.Mesh(new TH.PlaneGeometry(w,h),mt);p.position.set(x,y,z);p.rotation.y=ry;g.add(p);return mt};
+  g.userData.bm={front:pl(1.5,.32,4.41,2.6,0,Math.PI/2),side:pl(.95,.205,-.23,2.6,1.26,0),rear:pl(.5,.32,-4.41,2.5,.75,-Math.PI/2)};
+  return g;
+}
+
+/* ---- номер и текст из названия маршрута: «60 Придонской — Боровое» ---- */
+function parse(R,leg){
+  const base=R.R0||R,s=String(base.n||'').trim(),m=/^(\d+[A-Za-zА-Яа-я]?)\s*(.*)$/.exec(s);
+  let num=m?m[1]:'',txt=m?m[2]:s;
+  if(R.R0||!txt){
+    const st=R.s.map(id=>City.S.stops.find(x=>x.id===id)).filter(Boolean);
+    if(st.length)txt=R.loop?st[0].n+' (кольцо)':st[0].n+' — '+st[st.length-1].n;
+  }
+  if(leg&&!R.loop){const p=txt.split(/\s*[—–]\s*/);if(p.length===2)txt=p[1]+' — '+p[0]}
+  return{num,txt};
+}
+function board(num,txt){
+  const key='b|'+num+'|'+txt;let o=B.get(key);
+  if(!o){const c=document.createElement('canvas');c.width=512;c.height=110;o={c,t:new TH.CanvasTexture(c),num,txt,used:0};B.set(key,o)}
+  return o;
+}
+function rear(num){
+  const key='r|'+num;let o=B.get(key);
+  if(!o){const c=document.createElement('canvas');c.width=160;c.height=104;const g=c.getContext('2d');
+    g.fillStyle='#ffd21a';g.fillRect(0,0,160,104);g.fillStyle='#111';g.textAlign='center';g.textBaseline='middle';
+    g.font='800 '+(num.length>2?56:76)+'px Manrope,Arial,sans-serif';g.fillText(num,80,54);
+    o={c,t:new TH.CanvasTexture(c),static:1};B.set(key,o)}
+  return o;
+}
+function paint(o){
+  const c=o.c,g=c.getContext('2d'),W=c.width,H=c.height;
+  g.fillStyle='#24272a';g.fillRect(0,0,W,H);
+  let rx=6;
+  if(o.num){const nw=H+14;g.fillStyle='#ffd21a';g.fillRect(6,6,nw,H-12);g.fillStyle='#111';g.textAlign='center';g.textBaseline='middle';
+    g.font='800 '+(o.num.length>2?58:80)+'px Manrope,Arial,sans-serif';g.fillText(o.num,6+nw/2,H/2+3);rx=nw+16}
+  const rw=W-rx-6;
+  g.save();g.beginPath();g.rect(rx,0,rw,H);g.clip();
+  g.font='700 64px Manrope,Arial,sans-serif';g.textAlign='left';g.textBaseline='middle';g.fillStyle='#ffb21a';
+  const tw=g.measureText(o.txt).width,x=rx+((Date.now()/1000*80)%(rw+tw))-tw;   /* едет слева направо */
+  g.fillText(o.txt,x,H/2+3);g.restore();
+  o.t.needsUpdate=true;
+}
+function tick(g,b,R){
+  const p=parse(R,City.busLeg?City.busLeg(b):0),bm=g.userData.bm,o=board(p.num,p.txt),r=rear(p.num);
+  o.used=1;
+  [['front',o],['side',o],['rear',r]].forEach(([k,s])=>{if(bm[k].map!==s.t){bm[k].map=s.t;bm[k].color.set('#fff');bm[k].needsUpdate=true}});
+}
+function frame(){B.forEach(o=>{if(o.used&&!o.static)paint(o);o.used=0})}
+City.bus3d={has:m=>m===MODEL,make,tick,frame};
+})();
+</script>
+<script>
 /* Плагин: «Путешествие» — прогулка по городу от первого лица в 3D.
    Вставить В САМЫЙ КОНЕЦ, перед </body>. Нужен интернет (three.js r128 с cdnjs).
    Управление: WASD / стрелки вверх-вниз — ходьба, стрелки влево-вправо — поворот, Shift — бег, мышь (зажать) — осмотр, Esc — выйти.
@@ -3724,16 +3809,18 @@ function frame(){
  const seen=new Set();
  (City.vis()||[]).forEach(q=>{if(q.k!=='car'&&q.k!=='bus')return;
   const bus=q.k==='bus',len=q.r*2;let v=veh.get(q.ref);
-  if(!v){v={m:new TH.Mesh(box,L(bus?q.ref.c:q.ref.col)),px:q.x,py:q.y,an:0};scene.add(v.m);veh.set(q.ref,v)}
+  const B3=bus&&City.bus3d&&City.bus3d.has(q.ref.m);
+  if(!v){v={m:B3?City.bus3d.make(TH):new TH.Mesh(box,L(bus?q.ref.c:q.ref.col)),px:q.x,py:q.y,an:0,b3:B3};scene.add(v.m);veh.set(q.ref,v)}
   const dx=q.x-v.px,dy=q.y-v.py;if(dx*dx+dy*dy>.01){v.an=Math.atan2(dy,dx);v.px=q.x;v.py=q.y}
-  v.m.position.set(q.x,.3,q.y);v.m.rotation.y=-v.an;v.m.scale.set(len,bus?3.2*u:len*.3,bus?2.55*u:len*.4);v.m.visible=true;seen.add(q.ref)});
+  v.m.position.set(q.x,.3,q.y);v.m.rotation.y=-v.an;if(v.b3){v.m.scale.setScalar(u);City.bus3d.tick(v.m,q.ref,q.R)}else v.m.scale.set(len,bus?3.2*u:len*.3,bus?2.55*u:len*.4);v.m.visible=true;seen.add(q.ref)});
  veh.forEach((v,key)=>{if(!seen.has(key))v.m.visible=false});
  /* подсказка */
  if(n-hAt>300){hAt=n;let st='';
   for(const R of S.roads){let ok=false;for(let i=1;i<R.pts.length;i++)if(dseg([px,pz],R.pts[i-1],R.pts[i])<RW[R.t]/2+4){ok=true;break}if(ok){st=R.n||'';break}}
   const hd=((-yaw*180/Math.PI)%360+360)%360,mm=Math.floor(h*60)%60;
   hud.textContent=DIRS[Math.round(hd/45)%8]+' · '+(st||'—')+' · '+String(Math.floor(h)).padStart(2,'0')+':'+String(mm).padStart(2,'0')}
- renderer.render(scene,cam);
+ if(City.bus3d)City.bus3d.frame();
+renderer.render(scene,cam);
 }
 function exit(){
  if(!T)return;cancelAnimationFrame(T.raf);removeEventListener('keydown',kd,true);removeEventListener('keyup',ku,true);removeEventListener('resize',rs);
