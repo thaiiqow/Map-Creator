@@ -3835,207 +3835,6 @@ frame();
 })();
 </script>
 <script>
-/* ===== Плагин: салон ПАЗ-320415-04 в «Путешествии».
-   Вставить В САМЫЙ КОНЕЦ, перед </body> (после плагина «Путешествие»).
-   Нужны 6 мелких правок в старых плагинах — см. инструкцию в чате.
-   Управление: E — войти/выйти, F — сесть/встать, WASD — ходить, мышь/стрелки — смотреть. ===== */
-(function(){
-const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const FLOOR=.7,EYE_STAND=FLOOR+1.62,EYE_SIT=FLOOR+1.2;
-const LED_DIR=1;            /* 1 — строка бежит слева направо, -1 — справа налево */
-const HOLD_MAX=30;          /* сколько секунд автобус ждёт у остановки, пока вы у двери */
-let API=null,R=null,hold=null,holdT=0,act1=null,act2=null,b1=null,b2=null;
-
-/* ---------- сиденья (метры, ось x — к кабине, z>0 — правый борт с дверью) ---------- */
-const SEATS=[];
-for(let i=0;i<6;i++)[-.94,-.54].forEach(z=>SEATS.push({x:-2.75+i*.78,z}));
-for(let i=0;i<5;i++)[.54,.94].forEach(z=>SEATS.push({x:-2.6+i*.78,z}));
-SEATS.push({x:2.65,z:.94});
-const DRV={x:3.1,z:-.75};
-
-function hit(x,z){
-  const r=.17;
-  if(x<-4.05||x>2.95||z<-1||z>1)return true;
-  if(x>2.5&&z<-.28)return true;
-  return SEATS.some(s=>Math.abs(x-s.x)<.27+r&&Math.abs(z-s.z)<.21+r);
-}
-
-/* ---------- модель салона ---------- */
-function build(){
-  const TH=THREE,I=new TH.Group(),mats=[];
-  const mt=(c,e)=>{const m=new TH.MeshLambertMaterial({color:c,emissive:new TH.Color(c).multiplyScalar(e===undefined?.4:e)});mats.push(m);return m};
-  const box=(w,h,d,x,y,z,m,par)=>{const o=new TH.Mesh(new TH.BoxGeometry(w,h,d),m);o.position.set(x,y,z);(par||I).add(o);return o};
-  const cylV=(r,h,x,y0,z,m)=>{const o=new TH.Mesh(new TH.CylinderGeometry(r,r,h,8),m);o.position.set(x,y0+h/2,z);I.add(o)};
-  const cylX=(r,len,x0,y,z,m)=>{const g=new TH.CylinderGeometry(r,r,len,8);g.rotateZ(Math.PI/2);const o=new TH.Mesh(g,m);o.position.set(x0+len/2,y,z);I.add(o)};
-  const wall=mt('#c9ced2'),low=mt('#aeb4b9'),ceil=mt('#dfe3e6',.5),floor=mt('#4c545c',.35),dark=mt('#2c3136',.2),
-    seatM=mt('#8e949a'),seatD=mt('#6f757b'),back=mt('#a3a9ae'),blk=mt('#1a1c1e',.1),yel=mt('#e6b800',.5),blue=mt('#2e7fd9',.4),
-    door=mt('#b9bfc4'),skin=mt('#e0b896'),shirt=mt('#33506e');
-  const glass=new TH.MeshLambertMaterial({color:'#8fb4cc',transparent:true,opacity:.3,side:TH.DoubleSide});mats.push(glass);
-  const lamp=new TH.MeshBasicMaterial({color:'#f4f6f8'});mats.push(lamp);
-  /* пол, потолок, торцы */
-  box(8.6,.04,2.4,0,.68,0,floor);
-  box(8.6,.04,2.4,0,2.88,0,ceil);
-  box(.9,.03,.7,.3,2.855,0,dark);
-  [-.35,.35].forEach(z=>box(8,.02,.12,-.2,2.855,z,lamp));
-  box(.05,2.2,2.4,-4.3,1.8,0,wall);
-  box(.06,.7,2.4,4.3,2.55,0,ceil);
-  [-1,1].forEach(s=>box(.06,1,.1,4.3,1.7,s*1.12,wall));
-  /* борта с окнами */
-  [-1,1].forEach(s=>{
-    const z=s*1.17;
-    box(8.6,.7,.05,0,2.55,z,ceil);
-    if(s<0)box(8.6,.5,.05,0,.95,z,low);
-    else{box(5.6,.5,.05,-1.5,.95,z,low);box(2,.5,.05,3.3,.95,z,low)}
-    for(let i=0;i<9;i++){const x=-4+i;if(s>0&&x>1.2&&x<2.4)continue;box(.1,1,.06,x,1.7,z,wall)}
-  });
-  box(.08,1.6,.08,1.3,1.5,1.17,wall);box(.08,1.6,.08,2.3,1.5,1.17,wall);
-  /* двери */
-  const doors=[];
-  [[1.3,1],[2.3,-1]].forEach(([px,d])=>{const g=new TH.Group();g.position.set(px,0,1.17);I.add(g);
-    box(.5,1.6,.04,d*.25,1.5,0,door,g);box(.4,1,.045,d*.25,1.65,0,glass,g);doors.push(g)});
-  /* кабина */
-  box(.5,.5,1.15,4.05,.95,-.62,dark);box(.3,.5,1.15,4.15,.95,.62,dark);box(.9,.6,.7,3.55,1,.05,dark);
-  const wh=new TH.Mesh(new TH.TorusGeometry(.16,.02,8,16),blk);wh.position.set(3.82,1.32,DRV.z);wh.rotation.set(0,Math.PI/2,-.5);I.add(wh);
-  /* сиденья */
-  const seat=(x,z)=>{
-    box(.44,.08,.4,x,FLOOR+.45,z,seatM);box(.4,.4,.36,x,FLOOR+.2,z,seatD);
-    box(.07,.55,.4,x-.2,FLOOR+.75,z,back);box(.05,.04,.34,x-.2,FLOOR+1.05,z,blk);
-  };
-  SEATS.forEach(s=>seat(s.x,s.z));seat(DRV.x,DRV.z);
-  box(.28,.5,.4,DRV.x-.05,FLOOR+.95,DRV.z,shirt);
-  const hd=new TH.Mesh(new TH.SphereGeometry(.11,10,8),skin);hd.position.set(DRV.x-.05,FLOOR+1.42,DRV.z);I.add(hd);
-  /* поручни и валидаторы */
-  cylX(.022,6.6,-4.1,2.55,-.62,yel);cylX(.022,6.6,-4.1,2.55,.62,yel);
-  [[-2.35,-.37],[-2.35,.37],[-.8,-.37],[-.8,.37],[.75,-.37],[.75,.37],[1.3,1.05],[2.3,1.05]].forEach(p=>cylV(.022,1.85,p[0],FLOOR,p[1],yel));
-  cylX(.02,1.2,1.5,1.25,-.4,yel);
-  box(.1,.16,.1,1.3,1.5,.97,blue);box(.1,.16,.1,.75,1.55,.3,blue);
-  /* табло */
-  box(.76,.14,.07,4,2.6,0,blk);
-  const lc=document.createElement('canvas');lc.width=512;lc.height=64;
-  const lt=new TH.CanvasTexture(lc),lm=new TH.Mesh(new TH.PlaneGeometry(.7,.0875),new TH.MeshBasicMaterial({map:lt}));
-  lm.position.set(3.955,2.6,0);lm.rotation.y=-Math.PI/2;I.add(lm);
-  return{I,lc,lt,doors,mats};
-}
-function dispose(b){b.I.traverse(o=>{if(o.geometry)o.geometry.dispose()});b.mats.forEach(m=>m.dispose());b.lt.dispose()}
-
-/* ---------- табло ---------- */
-function ledText(){
-  const st=City.busState&&City.busState(R.ref);if(!st||!st.tr)return 'ПАЗ';
-  const tr=st.tr,at=!st.park&&st.dw>0;
-  const s=st.park?tr.stops[0]:at?tr.stops[Math.max(0,st.si-1)]:tr.stops[Math.min(st.si,tr.stops.length-1)];
-  const z=s&&City.S.stops.find(x=>x.id===s.id),m=/^\s*(\d+[A-Za-zА-Яа-я]?)/.exec((R.route&&R.route.n)||'');
-  return (m?m[1]+'   ':'')+(at||st.park?'Остановка: ':'Следующая: ')+(z?z.n:'—')+'        ';
-}
-function led(t){
-  const c=R.b.lc,g=c.getContext('2d'),W=512,H=64;
-  g.fillStyle='#140505';g.fillRect(0,0,W,H);
-  g.font='700 46px Manrope,Arial,sans-serif';g.textBaseline='middle';g.fillStyle='#ff3a22';
-  const s=ledText(),tw=g.measureText(s).width,k=(t*90)%(W+tw),x=LED_DIR>0?k-tw:W-k;
-  g.fillText(s,x,H/2+2);
-  g.fillStyle='rgba(0,0,0,.65)';
-  for(let i=0;i<W;i+=4)g.fillRect(i,0,1.4,H);
-  for(let j=0;j<H;j+=4)g.fillRect(0,j,W,1.4);
-  R.b.lt.needsUpdate=true;
-}
-
-/* ---------- посадка / выход / сиденья ---------- */
-function board(c){
-  const g=c.g,b=build(),hid=[];
-  g.add(b.I);
-  g.children.forEach(o=>{if(o.geometry&&o.geometry.type==='CylinderGeometry'){o.visible=false;hid.push(o)}});
-  const P=API.get();
-  R={ref:c.ref,route:c.route,g,b,hid,x:1.8,z:.75,k:0,sit:null,sx:0,sz:0,do:0,gone:0,t:0,ledAt:0,from:{x:P.x,z:P.z}};
-  API.setYaw(-Math.PI/2);API.setPit(0);API.cam.near=.1;API.cam.updateProjectionMatrix();
-}
-function leave(forced){
-  if(!R)return;const g=R.g,TH=THREE;g.updateMatrixWorld(true);
-  let spot=null;
-  for(const dz of [2.2,3.2,4.5,1.6]){const v=g.localToWorld(new TH.Vector3(1.8,0,1.2+dz));if(!API.blk(v.x,v.z)){spot=v;break}}
-  if(!spot)spot=new TH.Vector3(R.from.x,0,R.from.z);
-  API.pos(spot.x,spot.z);API.setYaw(g.rotation.y+Math.PI);API.setPit(0);
-  clean();
-}
-function clean(){
-  if(!R)return;
-  try{R.g.remove(R.b.I);dispose(R.b);R.hid.forEach(o=>o.visible=true)}catch(e){}
-  if(API){API.cam.near=.5;API.cam.updateProjectionMatrix()}
-  R=null;hold=null;holdT=0;
-}
-function sitOn(s){R.sit=s;R.sx=R.x;R.sz=R.z;R.dir=1}
-function standUp(){R.dir=-1;R.x=R.sx=R.sit.x;R.z=R.sz=R.sit.z<0?-.12:.12}
-
-/* ---------- ввод ---------- */
-function move(f,r,dt,run){
-  if(!R)return false;if(R.sit)return true;
-  const y=API.get().yaw,s=Math.sin(y),c=Math.cos(y),sp=(run?2.6:1.3)*dt,mx=(-s*f+c*r)*sp,mz=(-c*f-s*r)*sp;
-  if(!hit(R.x+mx,R.z))R.x+=mx;if(!hit(R.x,R.z+mz))R.z+=mz;
-  return true;
-}
-addEventListener('keydown',e=>{
-  if(!API||e.repeat||e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName))return;
-  if(e.code==='KeyE'&&act1)act1.fn();else if(e.code==='KeyF'&&act2)act2.fn();
-},true);
-const setBtn=(el,a)=>{el.hidden=!a;if(a)el.textContent=a.label};
-
-/* ---------- кадр ---------- */
-function tick(dt){
-  if(!API)return;
-  const TH=THREE,P=API.get();let a1=null,a2=null,want=null;
-  if(!R){
-    let best=null;
-    (City.vis()||[]).forEach(q=>{
-      if(q.k!=='bus'||!City.bus3d||!City.bus3d.has(q.ref.m))return;
-      const v=API.veh.get(q.ref),st=City.busState&&City.busState(q.ref);
-      if(!v||!v.m.visible||!st||!st.run||!(st.park||st.dw>0)||st.v>.3)return;
-      v.m.updateMatrixWorld(true);
-      const l=v.m.worldToLocal(new TH.Vector3(P.x,v.m.position.y+1,P.z)),d=Math.hypot(Math.max(Math.abs(l.x)-4.4,0),Math.max(Math.abs(l.z)-1.25,0));
-      if(d<4.5&&(!best||d<best.d))best={d,ref:q.ref,g:v.m,route:q.R};
-    });
-    if(best){want=best.ref;const c=best;a1={label:'Войти (E)',fn:()=>board(c)}}
-  }else{
-    const g=R.g;R.t+=dt;
-    if(!g.visible){if(++R.gone>30){leave(true);return}}else R.gone=0;
-    g.updateMatrixWorld(true);
-    const st=City.busState&&City.busState(R.ref),stopped=!!st&&(st.park||st.dw>0)&&st.v<.3;
-    /* сиденье: плавный переход */
-    if(R.sit){R.k=clamp(R.k+R.dir*dt*2.2,0,1);if(R.dir<0&&R.k<=0){R.sit=null;R.k=0}}
-    const e=R.k*R.k*(3-2*R.k);let px=R.x,pz=R.z,py=EYE_STAND;
-    if(R.sit){px=R.sx+(R.sit.x+.02-R.sx)*e;pz=R.sz+(R.sit.z-R.sz)*e;py=EYE_STAND+(EYE_SIT-EYE_STAND)*e}
-    /* двери */
-    R.do=clamp(R.do+(stopped?1:-1)*dt*2,0,1);R.b.doors.forEach(d=>d.scale.x=1-.88*R.do);
-    /* камера */
-    const mv=st&&st.v>.5?1:.25,sh=(Math.sin(R.t*17)*.004+Math.sin(R.t*9.3)*.003)*mv;
-    const v=new TH.Vector3(px,py+sh,pz);g.localToWorld(v);
-    API.cam.position.copy(v);
-    API.cam.quaternion.copy(g.quaternion).multiply(new TH.Quaternion().setFromEuler(new TH.Euler(P.pit,P.yaw,0,'YXZ')));
-    API.pos(v.x,v.z);
-    /* табло */
-    if(R.t-R.ledAt>.04){R.ledAt=R.t;led(R.t)}
-    /* кнопки */
-    const nearDoor=!R.sit&&Math.hypot(R.x-1.8,R.z-.9)<1.1;
-    if(stopped&&nearDoor){a1={label:'Выйти (E)',fn:()=>leave(false)};want=R.ref}
-    if(R.sit)a2={label:'Встать (F)',fn:standUp};
-    else{let b=null,bd=1.1;SEATS.forEach(s=>{const d=Math.hypot(R.x-s.x,R.z-s.z);if(d<bd){bd=d;b=s}});if(b)a2={label:'Сесть (F)',fn:()=>sitOn(b)}}
-  }
-  /* удержание автобуса у остановки */
-  if(want){holdT+=dt;hold=holdT<HOLD_MAX?want:null}else{holdT=0;hold=null}
-  act1=a1;act2=a2;setBtn(b1,a1);setBtn(b2,a2);
-}
-
-/* ---------- связь со старыми плагинами ---------- */
-City.holdBus=b=>hold!==null&&hold===b;
-City.trip={
-  start(api){
-    API=api;
-    api.tv.insertAdjacentHTML('beforeend','<div style="position:absolute;left:50%;transform:translateX(-50%);bottom:calc(24px + env(safe-area-inset-bottom,0px));display:flex;gap:8px"><button class="b p" id="tb1" hidden style="padding:12px 18px;font-size:15px;border-radius:12px;box-shadow:0 4px 18px #0004"></button><button class="b p" id="tb2" hidden style="padding:12px 18px;font-size:15px;border-radius:12px;box-shadow:0 4px 18px #0004"></button></div>');
-    b1=$('#tb1');b2=$('#tb2');
-    b1.onclick=()=>act1&&act1.fn();b2.onclick=()=>act2&&act2.fn();
-  },
-  stop(){clean();API=null;act1=act2=null},
-  move,tick
-};
-})();
-</script>
 /* ===== Плагин: 3D-автобус YUTONG ZK6890HGQ (снаружи) =====
    Вставить отдельным <script> СРАЗУ ПОСЛЕ плагина «3D-автобус ПАЗ-320415-04».
    Рядом с index.html положить: yutong_front.webp, yutong_side_doors.webp, yutong_side.webp, yutong_rear.webp
@@ -4150,6 +3949,8 @@ City.bus3d={
   frame:()=>{if(prev)prev.frame();frame()}
 };
 })();
+</script>
+<script>
 /* ===== Плагин: салон автобусов в «Путешествии» (ПАЗ-320415-04 и Yutong ZK6890HGQ).
    ЗАМЕНЯЕТ старый плагин «салон ПАЗ-320415-04»: удалите его <script> целиком и вставьте этот
    в самый конец, перед </body> (после плагина «Путешествие»).
@@ -4488,5 +4289,6 @@ City.trip={
   move,tick
 };
 })();
+</script>
 </body>
 </html>
