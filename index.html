@@ -3550,5 +3550,199 @@ City.HINT.depot='Прямоугольник: нажмите или протян�
 City.HINT.port=City.HINT.depot;City.HINT.svc=City.HINT.depot;
 })();
 </script>
+<script>
+/* Плагин: «Путешествие» — прогулка по городу от первого лица в 3D.
+   Вставить В САМЫЙ КОНЕЦ, перед </body>. Нужен интернет (three.js r128 с cdnjs).
+   Управление: WASD / стрелки вверх-вниз — ходьба, стрелки влево-вправо — поворот, Shift — бег, мышь (зажать) — осмотр, Esc — выйти.
+   На телефоне: левая половина экрана — джойстик, правая — осмотр. */
+(function(){
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),TC=10;
+const HT={house:14,shop:18,office:60,industry:26,terminal:30,hangar:20,tower:70,kinder:10,school:14,college:18,univ:24};
+const HB={r:12,c:16,o:55,i:22};
+const TCOL={w:'#3b8fd1',s:'#6ebae2',b:'#f0e2a8',g:'#b0cb86',f:'#6ca064',m:'#96968e'};
+const ZCOL={r:'#e9a77c',c:'#f2cf54',o:'#7aa6e8',i:'#9a958e'};
+const ASF=['#585e63','#51575c','#4a5055','#43494e'];
+const DIRS=['С','СВ','В','ЮВ','Ю','ЮЗ','З','СЗ'];
+const hh=(i,j,s)=>((i*374761393+j*668265263+s*2147483)>>>0)%1000/1000;
+const UI='<div id="tv" style="position:fixed;inset:0;z-index:60;background:#000;touch-action:none;user-select:none"><canvas id="tvc" style="width:100%;height:100%;display:block"></canvas>'
++'<div id="tvh" class="fl" style="left:10px;top:calc(10px + env(safe-area-inset-top,0px));padding:8px 12px;font-weight:700"></div>'
++'<button id="tvx" class="b fl" style="right:10px;top:calc(10px + env(safe-area-inset-top,0px))">Выйти</button>'
++'<button id="tvr" class="b fl" style="right:10px;bottom:calc(20px + env(safe-area-inset-bottom,0px))">Бег</button>'
++'<div id="tvj" style="position:absolute;width:100px;height:100px;border-radius:50%;border:2px solid #fff8;display:none"><div id="tvk" style="position:absolute;left:30px;top:30px;width:40px;height:40px;border-radius:50%;background:#fff9"></div></div></div>';
+$('#p2').insertAdjacentHTML('beforeend','<button id="trv" class="b">Путешествие</button>');
+let T=null;
+$('#trv').onclick=()=>{if(T)return;(window.THREE?Promise.resolve():new Promise((ok,no)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';s.onload=ok;s.onerror=no;document.head.appendChild(s)})).then(go).catch(()=>alert('Не удалось загрузить 3D-движок. Нужен интернет.'))};
+
+function go(){
+if(T)return;T={raf:0};
+const TH=THREE,S=City.S,V=City.view,u=City.bu();
+let px=(cv.clientWidth/2-V.x)/V.k,pz=(cv.clientHeight/2-V.y)/V.k;const X0=px,Z0=pz,RNG=1600;
+document.body.insertAdjacentHTML('beforeend',UI);
+const tv=$('#tv'),hud=$('#tvh'),jb=$('#tvj'),jk=$('#tvk');
+const renderer=new TH.WebGLRenderer({canvas:$('#tvc'),antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));
+const scene=new TH.Scene(),cam=new TH.PerspectiveCamera(70,1,.5,8000);cam.rotation.order='YXZ';
+const hemi=new TH.HemisphereLight('#ffffff','#556655',1),sun=new TH.DirectionalLight('#fff4dd',1);scene.add(hemi,sun);
+scene.background=new TH.Color('#8ec5f0');scene.fog=new TH.Fog('#8ec5f0',200,3000);
+const L=(c,o)=>new TH.MeshLambertMaterial(Object.assign({color:c},o||{}));
+const dimc=(c,f)=>new TH.Color(c).multiplyScalar(f);
+const rs=()=>{renderer.setSize(innerWidth,innerHeight,false);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()};rs();addEventListener('resize',rs);
+
+/* текстура окон */
+const wc=document.createElement('canvas');wc.width=wc.height=64;const g=wc.getContext('2d');
+g.fillStyle='#fff';g.fillRect(0,0,64,64);g.fillStyle='#6d8497';[[8,10],[36,10],[8,38],[36,38]].forEach(a=>g.fillRect(a[0],a[1],20,16));
+const wt=new TH.CanvasTexture(wc);wt.wrapS=wt.wrapT=TH.RepeatWrapping;wt.repeat.set(1/12,1/12);
+
+/* плоский слой: земля, дороги, тротуары */
+const fp=[],fc=[],cc=new TH.Color();
+const tri=(a,b,c,k)=>{fp.push(...a,...b,...c);cc.set(k);for(let i=0;i<3;i++)fc.push(cc.r,cc.g,cc.b)};
+const quad=(x,z,s,y,k)=>{tri([x,y,z],[x,y,z+s],[x+s,y,z],k);tri([x+s,y,z],[x,y,z+s],[x+s,y,z+s],k)};
+function rib(pts,w,y,k){for(let i=1;i<pts.length;i++){const a=pts[i-1],b=pts[i];let dx=b[0]-a[0],dz=b[1]-a[1];const l=Math.hypot(dx,dz);if(!l)continue;dx/=l;dz/=l;
+ const e=w*.35,ax=a[0]-dx*e,az=a[1]-dz*e,bx=b[0]+dx*e,bz=b[1]+dz*e,nx=-dz*w/2,nz=dx*w/2;
+ const A=[ax+nx,y,az+nz],B=[ax-nx,y,az-nz],C=[bx+nx,y,bz+nz],D=[bx-nx,y,bz-nz];tri(A,B,C,k);tri(B,D,C,k)}}
+
+const ground=new TH.Mesh(new TH.PlaneGeometry(40000,40000),L('#9db38a'));ground.rotation.x=-Math.PI/2;ground.position.set(X0,-.3,Z0);scene.add(ground);
+
+/* ландшафт */
+const trees=[],mts=[],TT=S.terr||{};
+for(const key in TT){const p=key.split(','),s=TT[key];for(let n=0;n<1024;n++){const ch=s[n];if(ch===' ')continue;
+ const i=+p[0]*32+(n&31),j=+p[1]*32+(n>>5),x=i*TC,z=j*TC;if(Math.abs(x-X0)>RNG||Math.abs(z-Z0)>RNG)continue;
+ quad(x,z,TC,ch==='w'?0:ch==='s'?.01:.02,TCOL[ch]||'#b0cb86');
+ if(ch==='f')trees.push([x+TC*(.2+.6*hh(i,j,3)),z+TC*(.2+.6*hh(i,j,4)),.8+.6*hh(i,j,5)]);
+ else if(ch==='m')mts.push([x+TC/2,z+TC/2,hh(i,j,6)])}}
+(S.trees||[]).forEach(t=>trees.push([t.x,t.y,1]));
+
+/* дороги */
+S.roads.forEach(R=>rib(R.pts,RW[R.t]+6,.05,'#b9b9b1'));
+S.roads.forEach(R=>rib(R.pts,RW[R.t],.2+R.t*.02,ASF[R.t]));
+S.roads.forEach(R=>{if(!R.ow)rib(R.pts,.6,.4,'#d2a800')});
+(S.rwys||[]).forEach(R=>rib(R.pts,+R.w||30,.25,'#4a5258'));
+(S.taxis||[]).forEach(R=>rib(R.pts,+R.w||14,.25,'#6b747a'));
+{const gm=new TH.BufferGeometry();gm.setAttribute('position',new TH.Float32BufferAttribute(fp,3));gm.setAttribute('color',new TH.Float32BufferAttribute(fc,3));gm.computeVertexNormals();
+ scene.add(new TH.Mesh(gm,L('#fff',{vertexColors:true,side:TH.DoubleSide})))}
+
+/* здания */
+const blocks=[];
+function ext(pts,h,col){
+ if(pts.length<3)return;
+ const geo=new TH.ExtrudeGeometry(new TH.Shape(pts.map(p=>new TH.Vector2(p[0],-p[1]))),{depth:h,bevelEnabled:false});geo.rotateX(-Math.PI/2);
+ scene.add(new TH.Mesh(geo,[L(dimc(col,.75)),L(col,{map:wt})]));
+ const xs=pts.map(p=>p[0]),zs=pts.map(p=>p[1]);blocks.push({pts,bb:[Math.min(...xs)-2,Math.min(...zs)-2,Math.max(...xs)+2,Math.max(...zs)+2]});
+}
+function flat(pts,col){
+ if(pts.length<3)return;
+ const geo=new TH.ShapeGeometry(new TH.Shape(pts.map(p=>new TH.Vector2(p[0],-p[1]))));geo.rotateX(-Math.PI/2);
+ const m=new TH.Mesh(geo,L(col,{side:TH.DoubleSide}));m.position.y=.03;scene.add(m);
+}
+const rp=b=>b.pts||[[b.x,b.y],[b.x+b.w,b.y],[b.x+b.w,b.y+b.h],[b.x,b.y+b.h]];
+S.blds.forEach(b=>{
+ const p=rp(b),col=(BLD[b.t]||BLD.house)[1];
+ if(b.t==='park'||b.t==='water'){flat(p,col);
+  if(b.t==='park'){const xs=p.map(q=>q[0]),zs=p.map(q=>q[1]);let c=0;
+   for(let x=Math.min(...xs);x<Math.max(...xs)&&c<200;x+=24)for(let z=Math.min(...zs);z<Math.max(...zs)&&c<200;z+=24){const q=[x+hh(x|0,z|0,1)*16,z+hh(x|0,z|0,2)*16];if(inPoly(q,p)){trees.push([q[0],q[1],.9+.5*hh(x|0,z|0,3)]);c++}}}
+  return}
+ ext(p,(HT[b.t]||20)*(.85+.3*hh(Math.round(b.x),Math.round(b.y),7)),col);
+});
+[['depots','#0c8a86',12],['svc','#9aa3a8',12],['ports','#1f6f9f',10]].forEach(a=>(S[a[0]]||[]).forEach(o=>{if(o.pts)ext(o.pts,a[2],a[1])}));
+(S.lms||[]).forEach(l=>ext([[l.x-29,l.y-20],[l.x+29,l.y-20],[l.x+29,l.y+20],[l.x-29,l.y+20]],150,'#5f93d6'));
+
+/* зоны */
+const Z=S.zones,gt=City.game?City.game.day:0,zb=[];
+if(Z)for(const key in Z){const p=key.split(','),z=Z[key];for(let n=0;n<1024;n++){const t=z.t[n];if(t===' ')continue;
+ const f=clamp((gt-(z.d.charCodeAt(n)-256))/6,0,1);if(f<=0)continue;
+ const i=+p[0]*32+(n&31),j=+p[1]*32+(n>>5),x=i*TC,y=j*TC;if(Math.abs(x-X0)>RNG||Math.abs(y-Z0)>RNG)continue;
+ zb.push({x:x+TC/2,z:y+TC/2,w:TC*(.35+.5*f),d:TC*(.3+.45*f),H:HB[t]*(.4+.6*f)*(.75+.5*hh(i,j,2)),c:ZCOL[t],v:.8+.3*hh(i,j,9)})}}
+function inst(geo,mat,list,fn){if(!list.length)return;const im=new TH.InstancedMesh(geo,mat,list.length),d=new TH.Object3D(),c=new TH.Color();
+ list.forEach((o,i)=>{fn(o,d,c);d.updateMatrix();im.setMatrixAt(i,d.matrix);im.setColorAt(i,c)});scene.add(im)}
+const box=new TH.BoxGeometry(1,1,1);box.translate(0,.5,0);
+const cone=new TH.ConeGeometry(1,1,6);cone.translate(0,.5,0);
+const cyl=new TH.CylinderGeometry(1,1,1,5);cyl.translate(0,.5,0);
+inst(box,L('#fff'),zb.slice(0,25000),(o,d,c)=>{d.position.set(o.x,0,o.z);d.scale.set(o.w,o.H,o.d);d.rotation.set(0,0,0);c.set(o.c).multiplyScalar(o.v)});
+inst(cyl,L('#6b4f3a'),trees.slice(0,12000),(o,d,c)=>{d.position.set(o[0],0,o[1]);d.scale.set(.6*o[2],5*o[2],.6*o[2]);d.rotation.set(0,0,0);c.set('#fff')});
+inst(cone,L('#fff'),trees.slice(0,12000),(o,d,c)=>{d.position.set(o[0],4*o[2],o[1]);d.scale.set(5*o[2],11*o[2],5*o[2]);d.rotation.set(0,0,0);c.set('#4c8a47').multiplyScalar(.85+.3*hh(o[0]|0,o[1]|0,1))});
+inst(cone,L('#fff'),mts.slice(0,6000),(o,d,c)=>{d.position.set(o[0],0,o[1]);d.scale.set(10,25+o[2]*35,10);d.rotation.set(0,0,0);c.set('#8f9088')});
+
+/* остановки и светофоры */
+S.stops.forEach(s=>{const p=new TH.Mesh(cyl,L('#555'));p.scale.set(.3,7,.3);p.position.set(s.x+6,0,s.y);scene.add(p);
+ const q=new TH.Mesh(box,L('#0c8a86'));q.scale.set(.4,1.8,2.4);q.position.set(s.x+6,5,s.y);scene.add(q)});
+const lights=[];
+(S.lights||[]).forEach(l=>{const p=new TH.Mesh(cyl,L('#333'));p.scale.set(.4,9,.4);p.position.set(l.x+7,0,l.y-7);scene.add(p);
+ const h=new TH.Mesh(box,L('#1c2226'));h.scale.set(1.6,4.2,1.6);h.position.set(l.x+7,8.5,l.y-7);scene.add(h);
+ const ms=[0,1,2].map(i=>{const m=new TH.MeshBasicMaterial({color:'#333'}),s=new TH.Mesh(new TH.SphereGeometry(.55,8,8),m);s.position.set(l.x+7,12-i*1.3,l.y-6.1);scene.add(s);return m});lights.push(ms)});
+
+/* столкновения */
+const near=(x,z,pad)=>S.roads.some(R=>R.pts.some((q,i)=>i&&dseg([x,z],R.pts[i-1],q)<RW[R.t]/2+pad));
+const isW=(x,z)=>{const i=Math.floor(x/TC),j=Math.floor(z/TC),s=S.terr&&S.terr[(i>>5)+','+(j>>5)];if(!s)return false;const c=s.charAt(((j&31)<<5)|(i&31));return c==='w'||c==='s'};
+function blk(x,z){
+ for(const b of blocks){if(x<b.bb[0]||x>b.bb[2]||z<b.bb[1]||z>b.bb[3])continue;
+  if(inPoly([x,z],b.pts))return true;
+  for(let i=0;i<b.pts.length;i++)if(dseg([x,z],b.pts[i],b.pts[(i+1)%b.pts.length])<1.5)return true}
+ return isW(x,z)&&!near(x,z,3);
+}
+if(blk(px,pz)){search:for(let r=10;r<400;r+=10)for(let a=0;a<12;a++){const x=X0+Math.cos(a*.52)*r,z=Z0+Math.sin(a*.52)*r;if(!blk(x,z)){px=x;pz=z;break search}}}
+
+/* ввод */
+let yaw=0,pit=0,jid=null,lid=null,jo=null,lp=null,jx=0,jy=0,run=false,bob=0;const keys=new Set();
+const kd=e=>{if(e.code==='Escape'){exit();return}keys.add(e.code);e.stopPropagation();if(e.code==='Space'||e.code.startsWith('Arrow'))e.preventDefault()};
+const ku=e=>{keys.delete(e.code);e.stopPropagation()};
+addEventListener('keydown',kd,true);addEventListener('keyup',ku,true);
+tv.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;tv.setPointerCapture(e.pointerId);
+ if(e.pointerType==='touch'&&e.clientX<innerWidth*.45&&jid===null){jid=e.pointerId;jo=[e.clientX,e.clientY];jb.style.display='block';jb.style.left=(jo[0]-50)+'px';jb.style.top=(jo[1]-50)+'px';jk.style.transform='none'}
+ else if(lid===null){lid=e.pointerId;lp=[e.clientX,e.clientY]}});
+tv.addEventListener('pointermove',e=>{
+ if(e.pointerId===jid){let dx=e.clientX-jo[0],dy=e.clientY-jo[1];const l=Math.hypot(dx,dy),m=50;if(l>m){dx*=m/l;dy*=m/l}jx=dx/m;jy=dy/m;jk.style.transform='translate('+dx+'px,'+dy+'px)'}
+ else if(e.pointerId===lid){yaw-=(e.clientX-lp[0])*.005;pit=clamp(pit-(e.clientY-lp[1])*.005,-1.3,1.3);lp=[e.clientX,e.clientY]}});
+const up=e=>{if(e.pointerId===jid){jid=null;jx=jy=0;jb.style.display='none'}if(e.pointerId===lid)lid=null};
+tv.addEventListener('pointerup',up);tv.addEventListener('pointercancel',up);
+$('#tvx').onclick=()=>exit();
+$('#tvr').onclick=e=>{run=!run;e.currentTarget.classList.toggle('on',run)};
+
+/* транспорт из 2D-симуляции */
+const veh=new Map(),eye=1.7*u,skyN=new TH.Color('#0b1226'),skyD=new TH.Color('#8ec5f0'),skyB=new TH.Color('#8a949c'),sk=new TH.Color();
+let last=Date.now(),hAt=0;
+function frame(){
+ T.raf=requestAnimationFrame(frame);
+ const n=Date.now(),dt=Math.min(.1,(n-last)/1000);last=n;
+ const k=c=>keys.has(c);
+ yaw+=((k('ArrowLeft')?1:0)-(k('ArrowRight')?1:0))*1.8*dt;
+ let f=(k('KeyW')||k('ArrowUp')?1:0)-(k('KeyS')||k('ArrowDown')?1:0)-jy,r=(k('KeyD')?1:0)-(k('KeyA')?1:0)+jx;
+ const l=Math.hypot(f,r);if(l>1){f/=l;r/=l}
+ const sp=(run||k('ShiftLeft')||k('ShiftRight')?15:5)*u*dt,s=Math.sin(yaw),c=Math.cos(yaw),mx=(-s*f+c*r)*sp,mz=(-c*f-s*r)*sp;
+ if(!blk(px+mx,pz))px+=mx;if(!blk(px,pz+mz))pz+=mz;
+ if(l>.05)bob+=dt*9*(run?1.6:1);
+ cam.position.set(px,eye+Math.sin(bob)*.06*u,pz);cam.rotation.set(pit,yaw,0);
+ /* небо, свет, погода */
+ const gm=City.gm?City.gm():720,h=(((gm%1440)+1440)%1440)/60,day=clamp(Math.sin((h-6)/12*Math.PI)*1.6,0,1),w=(S.wx&&S.wx.t)||'clear',bad=w!=='clear';
+ sk.copy(skyN).lerp(skyD,Math.max(day,.04));if(bad)sk.lerp(skyB,.5*Math.max(day,.2));
+ scene.background.copy(sk);scene.fog.color.copy(sk);scene.fog.far=w==='fog'?450:bad?1400:3000;
+ hemi.intensity=.3+.65*day*(bad?.75:1);sun.intensity=.05+.95*day*(bad?.5:1);
+ const a=((h-6)/12)*Math.PI;sun.position.set(px+Math.cos(a)*500,Math.max(80,Math.sin(a)*500),pz+200);
+ /* светофоры */
+ const ph=City.lightPhase?City.lightPhase(0):'g';
+ lights.forEach(m=>{m[0].color.set(ph==='r'?'#ff3030':'#401010');m[1].color.set(ph==='y'?'#ffd030':'#403810');m[2].color.set(ph==='g'?'#30e060':'#104020')});
+ /* машины и автобусы */
+ const seen=new Set();
+ (City.vis()||[]).forEach(q=>{if(q.k!=='car'&&q.k!=='bus')return;
+  const bus=q.k==='bus',len=q.r*2;let v=veh.get(q.ref);
+  if(!v){v={m:new TH.Mesh(box,L(bus?q.ref.c:q.ref.col)),px:q.x,py:q.y,an:0};scene.add(v.m);veh.set(q.ref,v)}
+  const dx=q.x-v.px,dy=q.y-v.py;if(dx*dx+dy*dy>.01){v.an=Math.atan2(dy,dx);v.px=q.x;v.py=q.y}
+  v.m.position.set(q.x,.3,q.y);v.m.rotation.y=-v.an;v.m.scale.set(len,bus?3.2*u:len*.3,bus?2.55*u:len*.4);v.m.visible=true;seen.add(q.ref)});
+ veh.forEach((v,key)=>{if(!seen.has(key))v.m.visible=false});
+ /* подсказка */
+ if(n-hAt>300){hAt=n;let st='';
+  for(const R of S.roads){let ok=false;for(let i=1;i<R.pts.length;i++)if(dseg([px,pz],R.pts[i-1],R.pts[i])<RW[R.t]/2+4){ok=true;break}if(ok){st=R.n||'';break}}
+  const hd=((-yaw*180/Math.PI)%360+360)%360,mm=Math.floor(h*60)%60;
+  hud.textContent=DIRS[Math.round(hd/45)%8]+' · '+(st||'—')+' · '+String(Math.floor(h)).padStart(2,'0')+':'+String(mm).padStart(2,'0')}
+ renderer.render(scene,cam);
+}
+function exit(){
+ if(!T)return;cancelAnimationFrame(T.raf);removeEventListener('keydown',kd,true);removeEventListener('keyup',ku,true);removeEventListener('resize',rs);
+ scene.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material)[].concat(o.material).forEach(m=>m.dispose())});
+ renderer.dispose();tv.remove();T=null;City.redraw();
+}
+frame();
+}
+})();
+</script>
 </body>
 </html>
