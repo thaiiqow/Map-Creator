@@ -4158,6 +4158,7 @@ const YUT=(()=>{
 })();
 
 const CFG={'ПАЗ-320415-04 Вектор Next':PAZ,'Yutong ZK6890HGQ':YUT};
+City.cabins=CFG;
 const SEATS_OF=()=>R.cfg.seats;
 const seatFloor=(C,s)=>C.floorAt(s.x)+(s.p||0);
 
@@ -4172,7 +4173,7 @@ function ledText(){
   return (m?m[1]+'   ':'')+(at||st.park?'Остановка: ':'Следующая: ')+(z?z.n:'—')+'        ';
 }
 function led(t){
-  const yut=R.cfg===YUT,c=R.b.lc,g=c.getContext('2d'),W=512,H=64;
+  const yut=R.cfg!==PAZ,c=R.b.lc,g=c.getContext('2d'),W=512,H=64;
   g.fillStyle=yut?'#17191b':'#140505';g.fillRect(0,0,W,H);
   g.font='700 46px Manrope,Arial,sans-serif';g.textBaseline='middle';g.fillStyle=yut?'#ffb21a':'#ff3a22';
   const s=ledText(),tw=g.measureText(s).width,k=(t*90)%(W+tw),x=LED_DIR>0?k-tw:W-k;
