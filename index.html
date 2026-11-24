@@ -5050,5 +5050,255 @@ City.trip={
 };
 })();
 </script>
+<script>
+/* ===== Плагин: 3D-автобус MAZ 206.948 (снаружи + салон) =====
+   Вставить отдельным <script> ПОСЛЕ плагина «салон автобусов» (и после Yutong).
+   Рядом с index.html положить фото (имена можно поменять в PHOTO ниже):
+     maz206_front.webp      — перед
+     maz206_rear.webp       — зад
+     maz206_side_doors.webp — борт с дверьми (правый)
+     maz206_side.webp       — борт без дверей (левый)
+   Кроп фото — в CROP (доли снимка: [x0,x1,y0,y1]).
+   Нужны две правки в плагине «салон автобусов» — см. сообщение. */
+(function(){
+const MODEL='MAZ 206.948';
+const PHOTO={front:'maz206_front.webp',doors:'maz206_side_doors.webp',left:'maz206_side.webp',rear:'maz206_rear.webp'};
+const CROP={front:[.25,.767,.208,.889],doors:[.049,.934,.391,.777],left:[.064,.953,.314,.769],rear:[.2246,.778,.049,.872]};
+/* габариты кузова, м: длина 12, ширина 2.55, низ 0.36, высота 2.75 */
+const LEN=12,BW=2.55,BOT=.36,BH=2.75,TOP=BOT+BH;
+const prev=City.bus3d;
+let TH=null,M=null,GEO=null,lastModel=null;
+const B=new Map();
+
+/* ---------- материалы и геометрия (ось x — вперёд, z>0 — правый борт с дверьми) ---------- */
+function mats(){
+  if(M)return M;
+  const L=c=>new TH.MeshLambertMaterial({color:c});
+  const ph=k=>{const m=L('#f2f4f5');
+    new TH.TextureLoader().load(PHOTO[k],t=>{const c=CROP[k];t.repeat.set(c[1]-c[0],c[3]-c[2]);t.offset.set(c[0],1-c[3]);m.map=t;m.color.set('#fff');m.needsUpdate=true},undefined,()=>{});
+    return m};
+  /* порядок граней BoxGeometry: +x перед, -x зад, +y крыша, -y низ, +z правый борт (двери), -z левый борт */
+  return M={body:[ph('front'),ph('rear'),L('#eef0f1'),L('#222'),ph('doors'),ph('left')],
+    wheel:L('#17191b'),hub:L('#9aa0a4'),roof:L('#f4f6f7'),seam:L('#98a1a8'),dark:L('#1c2226')};
+}
+function geo(){
+  if(GEO)return GEO;
+  const w=new TH.CylinderGeometry(.5,.5,.3,20);w.rotateX(Math.PI/2);
+  const h=new TH.CylinderGeometry(.28,.28,.32,12);h.rotateX(Math.PI/2);
+  return GEO={body:new TH.BoxGeometry(LEN,BH,BW),w,h};
+}
+function make(T){
+  TH=T;const g=new TH.Group(),m=mats(),G=geo();
+  const add=(w,h,d,x,y,z,mt)=>{const o=new TH.Mesh(new TH.BoxGeometry(w,h,d),mt);o.position.set(x,y,z);g.add(o);return o};
+  const body=new TH.Mesh(G.body,m.body);body.position.y=BOT+BH/2;g.add(body);
+  /* крыша: сзади кондиционер (x −4.2…−1.2), дальше блок баллонов CNG (x −1.0…4.1), 4 секции */
+  add(3.0,.32,1.9,-2.7,TOP+.16,0,m.roof);
+  [-3.6,-2.7,-1.8].forEach(x=>add(.5,.01,1.2,x,TOP+.325,0,m.dark));
+  add(5.1,.42,2.1,1.55,TOP+.21,0,m.roof);
+  add(4.9,.24,1.8,1.55,TOP+.42+.12,0,m.roof);
+  [.53,1.91,3.28].forEach(x=>add(.03,.5,2.12,x,TOP+.25,0,m.seam));
+  /* колёса: база ≈ 5,9 м */
+  [[3.27,1.1],[3.27,-1.1],[-2.62,1.1],[-2.62,-1.1]].forEach(([x,z])=>{
+    const a=new TH.Mesh(G.w,m.wheel);a.position.set(x,.5,z);g.add(a);
+    const b=new TH.Mesh(G.h,m.hub);b.position.set(x,.5,z+(z>0?.02:-.02));g.add(b)});
+  /* зеркала */
+  [1,-1].forEach(s=>{add(.05,.05,.3,5.9,2.8,s*1.36,m.dark);add(.1,.63,.24,5.9,2.47,s*1.52,m.dark)});
+  /* табло: перед, правый борт, зад (закрывают текст, нарисованный на фото) */
+  const pl=(w,h,x,y,z,ry)=>{const mt=new TH.MeshBasicMaterial({color:'#2b2e31'});
+    const p=new TH.Mesh(new TH.PlaneGeometry(w,h),mt);p.position.set(x,y,z);p.rotation.y=ry;g.add(p);return mt};
+  g.userData.maz={
+    front:pl(1.96,.36,LEN/2+.006,2.75,0,Math.PI/2),
+    side:pl(1.72,.28,1.67,2.88,BW/2+.006,0),
+    rear:pl(.66,.33,-LEN/2-.006,2.875,0,-Math.PI/2)
+  };
+  return g;
+}
+
+/* ---------- номер и текст из названия маршрута: «60 Придонской — Боровое» ---------- */
+function parse(R,leg){
+  const base=R.R0||R,s=String(base.n||'').trim(),m=/^(\d+[A-Za-zА-Яа-я]?)\s*(.*)$/.exec(s);
+  let num=m?m[1]:'',txt=m?m[2]:s;
+  if(R.R0||!txt){
+    const st=R.s.map(id=>City.S.stops.find(x=>x.id===id)).filter(Boolean);
+    if(st.length)txt=R.loop?st[0].n+' (кольцо)':st[0].n+' — '+st[st.length-1].n;
+  }
+  if(leg&&!R.loop){const p=txt.split(/\s*[—–]\s*/);if(p.length===2)txt=p[1]+' — '+p[0]}
+  return{num,txt};
+}
+function board(num,txt,w,h,kind){
+  const key=kind+'|'+num+'|'+txt;let o=B.get(key);
+  if(!o){const c=document.createElement('canvas');c.width=512;c.height=Math.round(512*h/w);
+    o={c,t:new TH.CanvasTexture(c),num,txt,used:0};B.set(key,o)}
+  return o;
+}
+function rearBoard(num){
+  const key='r|'+num;let o=B.get(key);
+  if(!o){const c=document.createElement('canvas');c.width=320;c.height=150;const g=c.getContext('2d');
+    g.fillStyle='#15181b';g.fillRect(0,0,320,150);g.fillStyle='#e9f1f6';g.textAlign='center';g.textBaseline='middle';
+    g.font='800 '+(num.length>2?92:112)+'px Manrope,Arial,sans-serif';g.fillText(num,160,80);
+    g.fillStyle='rgba(0,0,0,.5)';for(let i=0;i<320;i+=4)g.fillRect(i,0,1.3,150);for(let j=0;j<150;j+=4)g.fillRect(0,j,320,1.3);
+    o={c,t:new TH.CanvasTexture(c),static:1};B.set(key,o)}
+  return o;
+}
+function paint(o){
+  const c=o.c,g=c.getContext('2d'),W=c.width,H=c.height;
+  g.fillStyle='#14171a';g.fillRect(0,0,W,H);
+  let rx=6;
+  if(o.num){const nw=H*.9;g.fillStyle='#ffc21a';g.textAlign='center';g.textBaseline='middle';
+    g.font='800 '+Math.round(H*(o.num.length>2?.6:.78))+'px Manrope,Arial,sans-serif';g.fillText(o.num,6+nw/2,H/2+2);
+    g.fillStyle='#ffc21a55';g.fillRect(nw+10,H*.18,2,H*.64);rx=nw+20}
+  const rw=W-rx-6;
+  g.save();g.beginPath();g.rect(rx,0,rw,H);g.clip();
+  g.font='700 '+Math.round(H*.6)+'px Manrope,Arial,sans-serif';g.textAlign='left';g.textBaseline='middle';g.fillStyle='#ffc21a';
+  const tw=g.measureText(o.txt).width,x=rx+((Date.now()/1000*80)%(rw+tw))-tw;   /* бежит слева направо */
+  g.fillText(o.txt,x,H/2+2);g.restore();
+  g.fillStyle='rgba(0,0,0,.35)';for(let i=0;i<W;i+=3)g.fillRect(i,0,1,H);
+  o.t.needsUpdate=true;
+}
+function tick(g,b,R){
+  const p=parse(R,City.busLeg?City.busLeg(b):0),bm=g.userData.maz;
+  const f=board(p.num,p.txt,1.96,.36,'f'),s=board(p.num,p.txt,1.72,.28,'s'),r=rearBoard(p.num);
+  f.used=s.used=1;
+  [['front',f],['side',s],['rear',r]].forEach(([k,o])=>{if(bm[k].map!==o.t){bm[k].map=o.t;bm[k].color.set('#fff');bm[k].needsUpdate=true}});
+}
+function frame(){B.forEach(o=>{if(o.used&&!o.static)paint(o);o.used=0})}
+
+/* ---------- подключение: City.bus3d знает ПАЗ, Yutong и MAZ ---------- */
+City.bus3d={
+  has:m=>{lastModel=m;return m===MODEL||(prev?prev.has(m):false)},
+  make:(T,m)=>{m=m||lastModel;return m===MODEL?make(T):prev.make(T,m)},
+  tick:(g,b,R)=>{if(g.userData.maz)tick(g,b,R);else if(prev)prev.tick(g,b,R)},
+  frame:()=>{if(prev)prev.frame();frame()}
+};
+
+/* =====================================================================
+   САЛОН: низкий пол спереди и до середины, площадка на 2 ступени сзади,
+   средняя двустворчатая и передняя двери справа, кабина водителя слева,
+   синие сиденья с «зигзагами», жёлтые поручни, серые петли, табло спереди
+   ===================================================================== */
+const FL_LOW=.40,FL_HI=.80,CEIL=2.86;
+const flAt=x=>x>=-3.0?FL_LOW:x>=-3.25?.53:x>=-3.5?.67:FL_HI;
+const DRV={x:4.95,z:-.72};
+const SEATS=[];
+const S=(x,z,p)=>SEATS.push({x,z,c:'b',p:p||0});
+/* площадка сзади: диван на пятерых + два ряда 2+2 */
+[-.96,-.48,0,.48,.96].forEach(z=>S(-5.5,z));
+[-4.7,-3.9].forEach(x=>[-.95,-.51,.51,.95].forEach(z=>S(x,z)));
+/* левый борт; над арками — на подиумах */
+[-2.5,-1.7,-.9,-.1,.7,1.5,2.3,3.3].forEach(x=>{const p=(x===-2.5||x===3.3)?.17:0;[-.95,-.51].forEach(z=>S(x,z,p))});
+/* правый борт: между дверьми */
+S(-2.5,.51,.17);S(-2.5,.95,.17);
+[1.25,2.05].forEach(x=>[.51,.95].forEach(z=>S(x,z)));
+S(3.3,.51,.17);S(3.3,.95,.17);
+function hit(x,z){
+  const r=.17;
+  if(x<-5.8||x>5.6||z<-1.02||z>1.02)return true;
+  if(x>3.95&&z<-.2)return true;                       /* кабина водителя */
+  return SEATS.some(s=>Math.abs(x-s.x)<.27+r&&Math.abs(z-s.z)<.21+r);
+}
+function build(){
+  const T=THREE,I=new T.Group(),mats=[];
+  const mt=(c,e)=>{const m=new T.MeshLambertMaterial({color:c,emissive:new T.Color(c).multiplyScalar(e===undefined?.4:e)});mats.push(m);return m};
+  const box=(w,h,d,x,y,z,m,par)=>{const o=new T.Mesh(new T.BoxGeometry(w,h,d),m);o.position.set(x,y,z);(par||I).add(o);return o};
+  const cylV=(r,y0,y1,x,z,m)=>{const o=new T.Mesh(new T.CylinderGeometry(r,r,y1-y0,8),m);o.position.set(x,(y0+y1)/2,z);I.add(o)};
+  const cylX=(r,x0,x1,y,z,m)=>{const g=new T.CylinderGeometry(r,r,x1-x0,8);g.rotateZ(Math.PI/2);const o=new T.Mesh(g,m);o.position.set((x0+x1)/2,y,z);I.add(o)};
+  const wall=mt('#c9ced2'),low=mt('#aeb4b9'),ceil=mt('#e4e7e9',.5),floor=mt('#4c5762',.35),floor2=mt('#58636e',.35),
+    dark=mt('#2c3136',.2),blk=mt('#15171a',.1),plast=mt('#8d949a',.2),ped=mt('#454c52',.2),shell=mt('#4d5359',.25),
+    yel=mt('#f0b400',.55),gray=mt('#9aa0a6',.3),val=mt('#2e7fd9',.4),door=mt('#b9bfc4'),skin=mt('#e0b896'),shirt=mt('#33506e');
+  const glass=new T.MeshLambertMaterial({color:'#8fb4cc',transparent:true,opacity:.28,side:T.DoubleSide});mats.push(glass);
+  const lamp=new T.MeshBasicMaterial({color:'#f4f6f8'});mats.push(lamp);
+  const scr=new T.MeshBasicMaterial({color:'#10161c'});mats.push(scr);
+  /* ткань сидений: синяя с оранжевыми и голубыми зигзагами */
+  const fc=document.createElement('canvas');fc.width=fc.height=64;const fg=fc.getContext('2d');
+  fg.fillStyle='#2347b5';fg.fillRect(0,0,64,64);fg.lineWidth=2.4;fg.lineCap='round';fg.lineJoin='round';
+  [[8,4],[36,10],[20,30],[48,38],[4,44],[30,52],[52,8]].forEach((p,i)=>{
+    fg.strokeStyle=i%2?'#f08a2a':'#6fb2f2';fg.beginPath();fg.moveTo(p[0],p[1]);
+    for(let k=1;k<=6;k++)fg.lineTo(p[0]+(k%2?9:0),p[1]+k*3);fg.stroke()});
+  const ft=new T.CanvasTexture(fc);ft.wrapS=ft.wrapT=T.RepeatWrapping;mats.push(ft);
+  const fab=new T.MeshLambertMaterial({map:ft,color:'#fff',emissive:new T.Color('#777'),emissiveMap:ft});mats.push(fab);
+
+  /* пол: низкий, площадка и две ступеньки */
+  box(8.95,.04,2.5,1.425,FL_LOW-.02,0,floor);
+  box(2.45,FL_HI-FL_LOW,2.5,-4.725,(FL_LOW+FL_HI)/2,0,floor2);
+  box(.25,.67-FL_LOW,2.5,-3.375,(FL_LOW+.67)/2,0,floor2);
+  box(.25,.53-FL_LOW,2.5,-3.125,(FL_LOW+.53)/2,0,floor2);
+  [[-3.03,.53],[-3.28,.67],[-3.52,FL_HI]].forEach(([x,y])=>box(.06,.012,2.5,x,y+.006,0,yel));
+  /* потолок, лампы, решётки климата */
+  box(11.9,.04,2.5,0,CEIL+.02,0,ceil);
+  [-.45,.45].forEach(z=>box(11,.02,.12,0,CEIL-.005,z,lamp));
+  [-4.6,-3.6,-.4,2.2].forEach(x=>box(.7,.02,.5,x,CEIL-.005,0,dark));
+  /* задняя стенка с окном */
+  box(.05,1.2,2.5,-5.95,FL_HI+.6,0,wall);
+  box(.02,.8,2.2,-5.95,2.3,0,glass);
+  box(.05,.2,2.5,-5.95,2.76,0,ceil);
+  /* борта: нижняя панель, остекление, стойки */
+  const DOORS=[[-1.3,.53],[4.38,5.45]];
+  const seg=(z,x0,x1,y0,y1,m)=>{if(x1-x0>.01)box(x1-x0,y1-y0,.05,(x0+x1)/2,(y0+y1)/2,z,m)};
+  const ranges=s=>s<0?[[-5.95,5.95]]:[[-5.95,DOORS[0][0]],[DOORS[0][1],DOORS[1][0]],[DOORS[1][1],5.95]];
+  [-1,1].forEach(s=>{
+    const z=s*1.26;
+    ranges(s).forEach(([x0,x1])=>{
+      seg(z,x0,x1,FL_LOW,1.0,low);seg(z,x0,x1,1.0,2.45,glass);seg(z,x0,x1,2.45,CEIL+.04,ceil);
+      for(let x=Math.ceil(x0);x<x1;x+=1)if(x>x0+.1&&x<x1-.1)box(.08,1.45,.07,x,1.725,z,wall);
+    });
+  });
+  DOORS.forEach(([x0,x1])=>{box(x1-x0,.4,.05,(x0+x1)/2,2.65,1.26,ceil);[x0,x1].forEach(x=>box(.07,2.1,.07,x,FL_LOW+1.05,1.26,wall))});
+  /* створки дверей */
+  const doors=[];
+  const leaf=(px,d,w)=>{const g=new T.Group();g.position.set(px,0,1.26);I.add(g);
+    box(w,2.05,.04,d*w/2,FL_LOW+1.03,0,door,g);box(w-.12,1.6,.045,d*w/2,FL_LOW+1.12,0,glass,g);doors.push(g)};
+  leaf(-1.3,1,.915);leaf(.53,-1,.915);
+  leaf(4.38,1,.535);leaf(5.45,-1,.535);
+  /* перед: приборная панель, лобовое стекло, кабина */
+  box(.5,.75,1.1,5.65,FL_LOW+.38,-.65,dark);
+  box(.25,.7,2.5,5.8,FL_LOW+.35,0,dark);
+  const ws=new T.Mesh(new T.PlaneGeometry(2.4,1.7),glass);ws.position.set(5.92,1.95,0);ws.rotation.y=Math.PI/2;I.add(ws);
+  box(.05,.7,1.05,3.95,FL_LOW+.35,-.72,dark);
+  box(.03,1.5,1.05,3.95,FL_LOW+1.45,-.72,glass);
+  const wh=new T.Mesh(new T.TorusGeometry(.17,.02,8,16),blk);wh.position.set(DRV.x+.3,FL_LOW+.98,DRV.z);wh.rotation.set(0,Math.PI/2,-.5);I.add(wh);
+  /* сиденья */
+  const seat=s=>{
+    const f=flAt(s.x),y0=f+(s.p||0);
+    if(s.p)box(.46,s.p,.42,s.x,f+s.p/2,s.z,ped);else box(.05,.38,.05,s.x+.02,f+.2,s.z,plast);
+    box(.44,.08,.40,s.x,y0+.44,s.z,fab);
+    box(.07,.52,.40,s.x-.2,y0+.74,s.z,fab);
+    box(.03,.48,.38,s.x-.245,y0+.74,s.z,shell);
+  };
+  SEATS.forEach(seat);
+  /* водитель */
+  box(.44,.07,.4,DRV.x,FL_LOW+.44,DRV.z,plast);box(.07,.55,.4,DRV.x-.2,FL_LOW+.74,DRV.z,plast);
+  box(.28,.5,.4,DRV.x-.03,FL_LOW+.95,DRV.z,shirt);
+  const hd=new T.Mesh(new T.SphereGeometry(.11,10,8),skin);hd.position.set(DRV.x-.03,FL_LOW+1.42,DRV.z);I.add(hd);
+  /* поручни: потолочные рейки, стойки, петли */
+  [-.3,.3].forEach(z=>cylX(.022,-5.2,5.0,2.62,z,yel));
+  [-4.3,-2.2,.9,1.7,2.6].forEach(x=>[-.3,.3].forEach(z=>cylV(.022,flAt(x),2.62,x,z,yel)));
+  [[-1.3,1.18],[.53,1.18],[4.38,1.18],[5.45,1.18]].forEach(p=>cylV(.022,FL_LOW,2.62,p[0],p[1],yel));
+  cylX(.02,.6,1.6,1.1,1.1,yel);
+  const tg=new T.TorusGeometry(.055,.012,6,12),sg=new T.BoxGeometry(.014,.2,.014);
+  for(let x=-5.2;x<4.9;x+=.62)[-.3,.3].forEach(z=>{
+    const s=new T.Mesh(sg,gray);s.position.set(x,2.5,z);I.add(s);
+    const r=new T.Mesh(tg,gray);r.position.set(x,2.34,z);r.rotation.y=Math.PI/2;I.add(r)});
+  /* валидаторы у дверей */
+  box(.1,.16,.1,-1.3,1.5,1.1,val);box(.1,.16,.1,4.38,1.5,1.1,val);
+  /* экран под потолком посередине */
+  box(.06,.3,1.0,1.2,2.62,0,blk);
+  const sc=new T.Mesh(new T.PlaneGeometry(.92,.24),scr);sc.position.set(1.167,2.62,0);sc.rotation.y=-Math.PI/2;I.add(sc);
+  /* бегущее табло спереди */
+  box(.05,.22,1.56,5.72,2.62,0,blk);
+  const lc=document.createElement('canvas');lc.width=512;lc.height=64;
+  const lt=new T.CanvasTexture(lc),lm=new T.Mesh(new T.PlaneGeometry(1.5,.1875),new T.MeshBasicMaterial({map:lt}));
+  lm.position.set(5.69,2.62,0);lm.rotation.y=-Math.PI/2;I.add(lm);
+  /* часы (игровое время) */
+  box(.05,.1,.3,5.72,2.77,-.5,blk);
+  const cc=document.createElement('canvas');cc.width=128;cc.height=40;
+  const ct=new T.CanvasTexture(cc),cm=new T.Mesh(new T.PlaneGeometry(.26,.078),new T.MeshBasicMaterial({map:ct}));
+  cm.position.set(5.69,2.77,-.5);cm.rotation.y=-Math.PI/2;I.add(cm);
+  return{I,lc,lt,doors,mats,cc,ct,cs:''};
+}
+const CFG={seats:SEATS,hit,build,floorAt:flAt,half:[6.0,1.28],doors:[[-.38,.9],[4.9,.9]],entryZ:.7};
+if(City.cabins)City.cabins[MODEL]=CFG;
+else console.warn('MAZ: в плагине «салон автобусов» не добавлена строка City.cabins=CFG;');
+})();
+</script>
 </body>
 </html>
