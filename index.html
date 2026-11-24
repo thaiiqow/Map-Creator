@@ -5301,5 +5301,234 @@ if(City.cabins)City.cabins[MODEL]=CFG;
 else console.warn('MAZ: в плагине «салон автобусов» не добавлена строка City.cabins=CFG;');
 })();
 </script>
+<!-- ===== Плагин: Liquid Glass, нижнее меню по разделам, панель слева (время, погода, трафик, маршруты, потребности, образование, население),
+     цвет табло автобусов, автобусы ждут 8 секунд. Вставить В САМЫЙ КОНЕЦ, перед </body>. ===== -->
+<style id="ui-glass">
+:root{--gl:rgba(255,255,255,.34);--gl2:rgba(255,255,255,.58);--gbd:rgba(255,255,255,.7);--gin:rgba(255,255,255,.32);
+ --gsh:0 10px 36px rgba(15,30,40,.22),inset 0 1px 1px rgba(255,255,255,.85),inset 0 -1px 1px rgba(255,255,255,.25)}
+@media (prefers-color-scheme:dark){:root{--gl:rgba(34,44,50,.42);--gl2:rgba(40,52,58,.66);--gbd:rgba(255,255,255,.16);--gin:rgba(255,255,255,.08);
+ --gsh:0 10px 36px rgba(0,0,0,.45),inset 0 1px 1px rgba(255,255,255,.22),inset 0 -1px 1px rgba(255,255,255,.05)}}
+.fl,#side,dialog,#nav .nr{background:var(--gl)!important;-webkit-backdrop-filter:blur(24px) saturate(180%) brightness(1.04);backdrop-filter:blur(24px) saturate(180%) brightness(1.04);border:1px solid var(--gbd)!important;box-shadow:var(--gsh)!important}
+.fl,#nav .nr{border-radius:22px!important}
+.fl::before,#nav .nr::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(140deg,rgba(255,255,255,.28) 0,rgba(255,255,255,0) 38%,rgba(255,255,255,0) 72%,rgba(255,255,255,.1) 100%)}
+dialog{background:var(--gl2)!important;border-radius:26px}
+dialog::backdrop{background:rgba(10,20,26,.35);backdrop-filter:blur(6px)}
+#side{border-radius:0 26px 26px 0}
+button.b{border-radius:14px;transition:background .15s,transform .1s}
+button.b:hover{background:var(--gin)}button.b:active{transform:scale(.96)}
+button.b.on,button.p{background:linear-gradient(180deg,color-mix(in srgb,var(--acc) 88%,#fff),var(--acc))!important;color:var(--accink)!important;box-shadow:inset 0 1px 1px rgba(255,255,255,.55),0 2px 10px color-mix(in srgb,var(--acc) 40%,transparent)}
+input,select{background:var(--gin)!important;border:1px solid var(--gbd)!important;border-radius:12px}
+#hsp .b,#wxp .b{background:var(--gin)}
+#cities li .b:first-child{background:var(--gin)!important}
+#tree,#ed,#bar{display:none!important}
+#gp b:nth-of-type(3),#gp b:nth-of-type(3)~*{display:none}
+/* панель слева */
+#info{padding:0 2px}
+.sec{margin:6px 0;border-radius:18px;background:var(--gin);border:1px solid var(--gbd);overflow:hidden}
+.sec>summary{padding:10px 12px;font-weight:800}
+.sec .sb{padding:2px 10px 10px}
+.sec #hud,.sec #wxp,.sec #gp{margin:0;padding:0;border:0;background:none}
+.sec #wxp>b{display:none}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--gbd);background:var(--gin);color:var(--ink);font:inherit;font-weight:700;font-size:12px;padding:6px 11px;border-radius:999px;cursor:pointer}
+.chip.on{background:var(--acc);color:var(--accink)}.chip[disabled]{opacity:.45;cursor:default}
+.mu{color:var(--mut);font-size:13px}
+.tl{display:flex;align-items:center;gap:8px;font-size:13px;padding:2px 0}.tl i{width:22px;height:6px;border-radius:3px}
+.nd{padding:3px 0;font-size:13px}.nd div{display:flex;justify-content:space-between}.nd span{color:var(--mut)}
+.nd u{display:block;height:5px;border-radius:3px;background:var(--gin);text-decoration:none;margin-top:3px;overflow:hidden}.nd u i{display:block;height:100%;border-radius:3px}
+.er2{display:flex;justify-content:space-between;font-size:13px;padding:2px 0}.er2 span{color:var(--mut)}
+.big{font-size:22px;font-weight:800}
+/* нижнее меню */
+#nav{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:6px;align-items:center;max-width:calc(100% - 20px);z-index:15;pointer-events:none}
+#nav .nr{pointer-events:auto;position:relative;display:flex;gap:4px;padding:5px;max-width:100%;overflow-x:auto;justify-content:safe center;scrollbar-width:none;animation:nrIn .3s cubic-bezier(.2,.8,.2,1)}
+#nav .nr::-webkit-scrollbar{display:none}
+@keyframes nrIn{from{opacity:0;transform:translateY(26px) scale(.96)}to{opacity:1;transform:none}}
+#nav .nb{white-space:nowrap;display:flex;align-items:center;gap:7px;padding:9px 13px;flex:none}
+#nav .nb i{width:12px;height:12px;border-radius:4px;box-shadow:inset 0 0 0 1px #0003}
+#nav .nb small{opacity:.6;font-size:10px}#nav .nb:disabled{opacity:.5;cursor:default}
+/* положения плавающих панелей над меню */
+#hint,#fbar{bottom:calc(var(--nh,70px) + 10px)!important}
+#bm,#fm,#vbar,#apb,#rlb,#sbp,#cb,#bp{bottom:calc(var(--nh,70px) + 62px)!important}
+#vw{bottom:max(calc(var(--nh,70px) + 10px),110px)!important}
+#fol{bottom:max(calc(var(--nh,70px) + 100px),200px)!important}
+#toast{top:66px!important}
+#top{max-width:calc(100% - 20px);overflow-x:auto;scrollbar-width:none}
+@media (min-width:761px){
+ #side{position:absolute;left:10px;top:10px;bottom:10px;height:auto;width:268px;border-radius:26px}
+ #top,#p2,#pop,#legend{left:290px!important}
+ #legend{bottom:calc(var(--nh,70px) + 10px)!important}
+ #nav{left:290px;right:110px;transform:none;max-width:none}
+}
+@media (max-width:760px){#insp{bottom:calc(var(--nh,70px) + 8px)!important}}
+</style>
+<script>
+(function(){
+const E=City.esc,n0=v=>Math.round(v).toLocaleString('ru-RU');
+const mpu=()=>((City.S.scale||50)/50);
+const LS=k=>{try{return localStorage.getItem(k)}catch(e){return null}};
+const SS=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+
+/* ================= верхние кнопки: «Выбрать/Ластик/±» переезжают в #top ================= */
+const top_=$('#top');$('#bar').querySelectorAll('button').forEach(b=>top_.appendChild(b));
+
+/* ================= панель слева ================= */
+const info=document.createElement('div');info.id='info';$('#cname').insertAdjacentElement('afterend',info);
+function sec(title,open){const d=document.createElement('details');d.className='sec';d.open=open!==false;d.innerHTML='<summary>'+title+'</summary><div class="sb"></div>';info.appendChild(d);return d.querySelector('.sb')}
+const sT=sec('Время и дата'),sW=sec('Погода'),sTr=sec('Трафик'),sR=sec('Маршруты'),sN=sec('Потребности'),sEd=sec('Образование'),sP=sec('Население'),sB=sec('Табло автобусов',false),sC=sec('Страны и войны',false);
+if($('#hud'))sT.appendChild($('#hud'));if($('#wxp'))sW.appendChild($('#wxp'));if($('#gp'))sC.appendChild($('#gp'));
+
+/* --- трафик --- */
+let traffic=LS('ui:traffic')==='1';
+const TCOL=['#2ecc71','#f5a623','#e63946','#8b0a1a'],TNAME=['Низкий','Средний','Большой','Очень большой'];
+sTr.innerHTML='<button class="chip" id="ui-tr">Показать трафик</button><div style="margin-top:8px">'+TCOL.map((c,i)=>'<div class="tl"><i style="background:'+c+'"></i>'+TNAME[i]+'</div>').join('')+'</div>';
+const trb=$('#ui-tr');const trSync=()=>{trb.classList.toggle('on',traffic);trb.textContent=traffic?'Трафик включён':'Показать трафик'};
+trb.onclick=()=>{traffic=!traffic;SS('ui:traffic',traffic?'1':'0');trSync();City.redraw()};trSync();
+const tmap=new WeakMap();let tAt=0;const KMH=[25,35,45,55];
+function tcalc(){
+  const agg=new Map();
+  City.vis().forEach(q=>{if(q.k!=='car')return;const c=q.ref,R=c.R;if(!R)return;let a=agg.get(R);if(!a){a={n:0,s:0};agg.set(R,a)}
+    a.n++;const vm=KMH[R.t]*(c.vf||1)/3.6*4/mpu();if(c.v<vm*.3)a.s++});
+  City.S.roads.forEach(R=>{
+    const a=agg.get(R)||{n:0,s:0};let L=0;for(let i=1;i<R.pts.length;i++)L+=Math.hypot(R.pts[i][0]-R.pts[i-1][0],R.pts[i][1]-R.pts[i-1][1]);
+    const d=a.n/(Math.max(L*mpu()/1000,.02)*LN[R.t]);let raw=d<=6?0:d<=14?1:d<=28?2:3;
+    if(a.n>=3&&a.s/a.n>=.5)raw=Math.min(3,raw+1);
+    const p=tmap.get(R)||{v:raw};p.v=p.v*.7+raw*.3;p.lv=Math.round(p.v);tmap.set(R,p);
+  });
+}
+City.layers.over.push(()=>{
+  if(!traffic)return;const t=performance.now();if(t-tAt>400){tAt=t;tcalc()}
+  City.S.roads.forEach(R=>{const p=tmap.get(R);line(R.pts,RW[R.t],TCOL[p?p.lv:0]+'b0')});
+});
+
+/* --- фильтр маршрутов --- */
+const RT=[['all','Все'],['bus','Автобус'],['metro','Метро'],['train','Поезд'],['air','Самолёт'],['sea','Порт'],['tram','Трамвай (скоро)',1],['trol','Троллейбус (скоро)',1]];
+const REAL=['bus','metro','train','air','sea'];
+let show=new Set();try{show=new Set(JSON.parse(LS('ui:routes')||'[]'))}catch(e){}
+sR.innerHTML='<div class="chips">'+RT.map(r=>'<button class="chip" data-r="'+r[0]+'"'+(r[2]?' disabled':'')+'>'+r[1]+'</button>').join('')+'</div><div class="mu" style="margin-top:6px">Выберите, какие маршруты показывать на карте. Транспорт ездит всегда.</div>';
+const rSync=()=>{sR.querySelectorAll('[data-r]').forEach(b=>b.classList.toggle('on',show.has(b.dataset.r)))};
+sR.onclick=e=>{const b=e.target.closest('[data-r]');if(!b||b.disabled)return;const k=b.dataset.r;
+  if(k==='all'){if(show.has('all'))show.clear();else{show=new Set(REAL);show.add('all')}}
+  else{show.has(k)?show.delete(k):show.add(k);show.delete('all');if(REAL.every(x=>show.has(x)))show.add('all')}
+  SS('ui:routes',JSON.stringify([...show]));rSync();City.redraw()};rSync();
+const vis=k=>show.has(k);
+/* скрываем линии маршрутов на карте */
+const _draw=draw;
+draw=function(){
+  const S=City.S,sv={};
+  if(!vis('bus')){sv.routes=S.routes;const a=S.routes.slice();a.forEach=()=>{};S.routes=a}
+  if(!vis('air')&&S.aroutes){sv.aroutes=S.aroutes;const a=S.aroutes.slice(),fe=Array.prototype.forEach;a.forEach=function(fn,t){if(/rpts\(/.test(String(fn)))return;return fe.call(this,fn,t)};S.aroutes=a}
+  try{_draw()}finally{if(sv.routes)S.routes=sv.routes;if(sv.aroutes)S.aroutes=sv.aroutes}
+};
+const _line=line;
+line=function(pts,w,c,dash){
+  if(dash&&dash.length===2){
+    if(dash[0]===12&&dash[1]===9&&w===2.5&&!vis('sea'))return;
+    if(dash[0]===9&&dash[1]===6&&w===2.2&&!vis('metro'))return;
+    if(dash[0]===8&&dash[1]===8&&w===1.6&&!vis('train'))return;
+  }else if(!dash&&typeof c==='string'&&/^#[0-9a-f]{6}44$/i.test(c)&&!vis('metro'))return;
+  return _line(pts,w,c,dash);
+};
+
+/* --- потребности / образование / население --- */
+const SVN={fire:['Пожарная часть','#e4572e'],police:['Полиция','#2e5aa8'],amb:['Скорая помощь','#d7263d'],garbage:['Вывоз мусора','#6b7a3c'],morgue:['Вывоз тел','#59636b'],gas:['Газовая служба','#e9a400']};
+const ED={kinder:['🧸','Детские сады'],school:['🏫','Школы'],college:['📚','Колледжи'],univ:['🎓','Университеты']};
+const hw=b=>(b.pop===undefined||b.pop==='')?Math.max(1,Math.round(b.w*b.h*mpu()*mpu()/25)):Math.max(0,+b.pop||0);
+const last={};const put=(k,el,h)=>{if(last[k]!==h){last[k]=h;el.innerHTML=h}};
+function tick(){
+  const S=City.S,hs=S.blds.filter(b=>b.t==='house').map(b=>({x:b.x+b.w/2,y:b.y+b.h/2,w:hw(b),nd:b.nd})),W=hs.reduce((s,h)=>s+h.w,0),sv=S.svc||[];
+  let h;
+  if(!W)h='<div class="mu">Нет жилых домов</div>';
+  else{
+    h=Object.keys(SVN).map(t=>{const p=Math.round(hs.reduce((s,x)=>s+(sv.some(q=>q.t===t&&Math.hypot(q.x-x.x,q.y-x.y)<260)?x.w:0),0)/W*100);
+      return '<div class="nd"><div><span>'+SVN[t][0]+'</span><b style="color:'+(p<60?'var(--red)':'inherit')+'">'+p+'%</b></div><u><i style="width:'+p+'%;background:'+SVN[t][1]+'"></i></u></div>'}).join('');
+    const og=hs.filter(x=>x.nd&&x.nd.garbage>100).length,om=hs.filter(x=>x.nd&&x.nd.morgue>10).length;
+    h+='<div class="mu" style="margin-top:4px">Переполнено: мусор — '+og+' дом., тела — '+om+' дом.</div>';
+  }
+  put('n',sN,h);
+  put('e',sEd,Object.keys(ED).map(t=>'<div class="er2"><div>'+ED[t][0]+' '+ED[t][1]+'</div><b>'+S.blds.filter(b=>b.t===t).length+'</b></div>').join(''));
+  const tot=City.totalPop?City.totalPop():0;
+  put('p',sP,'<div class="big">'+n0(tot)+'</div><div class="mu">человек</div>'+(S.dists||[]).map(d=>'<div class="er2"><span>'+E(d.n)+'</span><b>'+n0(d.pop||0)+'</b></div>').join(''));
+}
+setInterval(()=>{try{tick()}catch(x){console.error(x)}},700);tick();
+
+/* ================= нижнее меню ================= */
+const CATS=[['Дороги','Дороги'],['Здания','Здания'],['Природа','Природа'],['Район','Районы'],['Транспорт','Транспорт'],['Измерения','Измерения'],['Ландшафт','Ландшафт'],['Зоны','Зоны'],['Достопримечательности','Достопримечательности'],['Службы','Экстренные службы'],['Потребности','Потребностные службы'],['Образование','Образование'],['Катаклизмы','Катаклизмы']];
+const nav=document.createElement('div');nav.id='nav';$('#wrap').appendChild(nav);
+let path=[];
+const topOf=n=>TREE.find(g=>g[0]===n&&Array.isArray(g[1]));
+const lab=n=>n==='Автобусный транспорт'?'Автобус':n;
+function rowsData(){
+  const rows=[CATS.map(c=>({k:'g',n:c[0],d:0}))];
+  if(!path.length)return rows;
+  const top=topOf(CATS.find(c=>c[0]===path[0])[1]);let kids=top?top[1]:[];
+  for(let d=1;;d++){
+    const items=kids.map(n=>Array.isArray(n[1])?{k:'g',n:n[0],t:lab(n[0]),d}:{k:'l',n:n[0],d,node:n});
+    if(path[0]==='Транспорт'&&d===1)items.push({k:'x',n:'Трамвай'},{k:'x',n:'Троллейбус'});
+    rows.push(items);
+    const f=path[d]!==undefined&&kids.find(n=>n[0]===path[d]&&Array.isArray(n[1]));if(!f)break;kids=f[1];
+  }
+  return rows;
+}
+function html(it){
+  if(it.k==='g')return '<button class="b nb" data-k="g" data-d="'+it.d+'" data-n="'+E(it.n)+'">'+E(it.t||it.n)+'</button>';
+  if(it.k==='x')return '<button class="b nb" disabled title="Скоро">'+E(it.n)+' <small>скоро</small></button>';
+  const n=it.node;return '<button class="b nb" data-k="l" data-tool="'+n[1]+'" data-tt="'+E(n[2]===undefined?'':n[2])+'"><i style="background:'+chip(n)+'"></i>'+E(n[0])+'</button>';
+}
+function navSync(){
+  nav.querySelectorAll('.nb').forEach(b=>{
+    if(b.dataset.k==='g')b.classList.toggle('on',path[+b.dataset.d]===b.dataset.n);
+    else if(b.dataset.k==='l')b.classList.toggle('on',City.tool===b.dataset.tool&&String(tt)===b.dataset.tt);
+  });
+}
+function renderNav(){
+  const rows=rowsData(),sigs=rows.map(r=>r.map(html).join('')),cur=[...nav.children];
+  for(let i=0;i<rows.length;i++){
+    if(cur[i]&&cur[i].dataset.sig===sigs[i])continue;
+    const el=document.createElement('div');el.className='nr';el.dataset.sig=sigs[i];el.innerHTML=sigs[i];
+    if(cur[i])nav.replaceChild(el,cur[i]);else nav.appendChild(el);
+  }
+  while(nav.children.length>rows.length)nav.lastChild.remove();
+  navSync();
+}
+nav.addEventListener('click',e=>{
+  const b=e.target.closest('.nb');if(!b||b.disabled)return;
+  if(b.dataset.k==='g'){const d=+b.dataset.d,n=b.dataset.n;path=path[d]===n?path.slice(0,d):path.slice(0,d).concat(n);renderNav()}
+  else setTool(b.dataset.tool,b.dataset.tt);
+});
+const _st=setTool;setTool=function(t,ty){_st(t,ty);navSync()};
+renderNav();
+new ResizeObserver(()=>$('#wrap').style.setProperty('--nh',(nav.offsetHeight+12)+'px')).observe(nav);
+
+/* ================= цвет табло автобусов (снаружи) ================= */
+let tc=LS('ui:tablo')||'#ffb21a';City.tabloColor=tc;
+sB.innerHTML='<label style="display:flex;justify-content:space-between;align-items:center;font-size:13px">Цвет номера и маршрута<input type="color" id="ui-tc" value="'+tc+'" style="width:48px;height:34px;padding:2px;margin:0"></label><div class="mu" style="margin-top:6px">Номера сзади обновятся при перезагрузке страницы.</div>';
+$('#ui-tc').oninput=e=>{tc=e.target.value;City.tabloColor=tc;SS('ui:tablo',tc)};
+const SRC=new Set(['#ffb21a','#ffc21a','#ffd21a']);
+const P=CanvasRenderingContext2D.prototype,fd=Object.getOwnPropertyDescriptor(P,'fillStyle');
+Object.defineProperty(P,'fillStyle',{configurable:true,get(){return fd.get.call(this)},set(v){
+  if(typeof v==='string'&&(v.length===7||v.length===9)){
+    const k=v.slice(0,7).toLowerCase(),c=this.canvas;
+    if(c&&c.height!==64&&c.width>=320){
+      if(SRC.has(k))v=tc+(v.length===9?v.slice(7):'');
+      else if(k==='#e9f1f6'&&c.width===320&&c.height===150)v=tc;
+    }
+  }
+  fd.set.call(this,v);
+}});
+
+/* ================= автобусы ждут 8 секунд и едут (игрок внутри или нет) ================= */
+City.holdBus=()=>false;
+const lastDw=new WeakMap();
+(function lp(){
+  try{(City.S.routes||[]).forEach(R=>(R.buses||[]).forEach(b=>{
+    const st=City.busState&&City.busState(b);if(!st)return;
+    const pv=lastDw.get(b)||0;
+    if(!st.park&&st.dw>pv+.05)st.dw=8;
+    lastDw.set(b,st.dw);
+  }))}catch(e){}
+  requestAnimationFrame(lp);
+})();
+})();
+</script>
 </body>
 </html>
