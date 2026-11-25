@@ -7460,5 +7460,99 @@ setInterval(()=>{try{
 }catch(e){console.error(e)}},300);
 })();
 </script>
+<script>
+/* Плагин: «Рекомендуемый маршрут» (автобус, трамвай, троллейбус).
+   Нажмите начальную и конечную остановку — маршрут пройдёт по дорогам и захватит все остановки по пути. */
+(function(){
+const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+const say=t=>{const e=$('#toast');if(!e)return;e.textContent=t;e.hidden=false;clearTimeout(say.t);say.t=setTimeout(()=>e.hidden=true,3200)};
+const THR=28;                       /* насколько далеко от пути может стоять остановка, чтобы войти в маршрут */
+const stopsOf=sys=>sys==='bus'?City.S.stops:(City.S.pstops||[]).filter(s=>s.sys===sys);
+let rc=null;
+
+/* положение точки вдоль ломаной */
+function along(pts,p){
+  let acc=0,best={d:0,off:1e18};
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1],b=pts[i],dx=b[0]-a[0],dy=b[1]-a[1],l2=dx*dx+dy*dy,L=Math.sqrt(l2);
+    let t=l2?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l2:0;t=Math.max(0,Math.min(1,t));
+    const off=Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy);
+    if(off<best.off)best={d:acc+t*L,off};
+    acc+=L;
+  }
+  return{d:best.d,off:best.off,L:acc};
+}
+/* путь по дорогам (или по путям трамвая/троллейбуса) между двумя остановками */
+function roadPath(sys,a,b){
+  if(sys==='bus'){
+    const base=R=>R.s.map(i=>City.S.stops.find(s=>s.id===i)).filter(Boolean).map(s=>[s.x,s.y]);
+    return City.path?City.path({s:[a.id,b.id],loop:false},base):null;
+  }
+  const T=City.vTrips&&City.vTrips({sys,s:[a.id,b.id],loop:false});
+  return T&&T.F?T.F.pts:null;
+}
+/* список остановок: начальная → все по пути (по порядку) → конечная */
+function build(sys,a,b){
+  const pts=roadPath(sys,a,b);
+  if(!pts||pts.length<(sys==='bus'?3:2))return null;
+  const mid=[];
+  stopsOf(sys).forEach(s=>{
+    if(s===a||s===b)return;
+    const r=along(pts,[s.x,s.y]);
+    if(r.off<=THR&&r.d>4&&r.d<r.L-4)mid.push({id:s.id,d:r.d});
+  });
+  mid.sort((x,y)=>x.d-y.d);
+  return [a.id].concat(mid.map(m=>m.id),[b.id]);
+}
+function create(sys,ids){
+  const S=City.S,nm=id=>(stopsOf(sys).find(s=>s.id===id)||{}).n||'';
+  const f=nm(ids[0]),l=nm(ids[ids.length-1]);
+  if(sys==='bus'){
+    const d=S.depots.find(x=>!x.k||x.k==='bus');
+    City.add('routes',{n:(S.routes.length+1)+' '+f+' — '+l,c:RC[S.routes.length%6],s:ids,loop:false,d:d?d.id:null});
+  }else{
+    S.vroutes=S.vroutes||[];
+    const n=S.vroutes.filter(R=>R.sys===sys).length+1,d=S.depots.find(x=>x.k===sys);
+    City.add('vroutes',{n:n+' '+f+' — '+l,c:RC[S.vroutes.length%6],sys,s:ids,loop:false,d:d?d.id:null,cars:3,vars:[],veh:[]});
+  }
+  say('Маршрут создан. Остановок: '+ids.length);
+}
+
+/* инструмент */
+City.HINT.rec='Нажмите начальную остановку, затем конечную — маршрут составится сам и захватит все остановки по пути.';
+City.tools.rec=(p,r)=>{
+  const sys=String(tt),k=City.view.k;let best=null;
+  stopsOf(sys).forEach(s=>{const d=dst([s.x,s.y],r);if(d<22/k&&(!best||d<best.d))best={d,s}});
+  if(!best){say('Нажмите на остановку');return}
+  if(!rc||rc.sys!==sys){rc={sys,a:best.s};return}
+  if(best.s===rc.a)return;
+  const a=rc.a;rc=null;
+  const ids=build(sys,a,best.s);
+  if(!ids)say(sys==='bus'?'Между остановками нет пути по дорогам':'Между остановками нет пути: проверьте линию и направление');
+  else create(sys,ids);
+};
+City.addLeaf('Транспорт/Автобусный транспорт',['Рекомендуемый маршрут','rec','bus','#f5a623']);
+City.addLeaf('Транспорт/Трамвай',['Рекомендуемый маршрут','rec','tram','#f5a623']);
+City.addLeaf('Транспорт/Троллейбус',['Рекомендуемый маршрут','rec','trol','#f5a623']);
+
+/* панель и подсветка */
+$('#wrap').insertAdjacentHTML('beforeend','<div id="rcb" class="fl" hidden style="left:50%;transform:translateX(-50%);bottom:calc(var(--nh,70px) + 62px);padding:8px 14px;display:flex;gap:8px;align-items:center;z-index:6"><span id="rct"></span><button id="rcx" class="b">Отмена</button></div>');
+$('#rcx').onclick=()=>{rc=null;City.redraw()};
+addEventListener('keydown',e=>{if(e.key==='Escape'&&City.tool==='rec'){rc=null;City.redraw()}});
+City.layers.over.push((c,P)=>{
+  const on=City.tool==='rec',k=City.view.k,u=1/k;
+  $('#rcb').hidden=!on;
+  if(!on){rc=null;return}
+  const sys=String(tt);
+  if(rc&&rc.sys!==sys)rc=null;
+  $('#rct').textContent=rc?'Начальная: '+rc.a.n+'. Выберите конечную остановку':'Выберите начальную остановку';
+  stopsOf(sys).forEach(s=>{c.beginPath();c.arc(s.x,s.y,14*Math.max(1,.55/k),0,7);c.lineWidth=2*u;c.strokeStyle='#f5a623';c.setLineDash([5*u,4*u]);c.stroke();c.setLineDash([])});
+  if(rc){
+    c.beginPath();c.arc(rc.a.x,rc.a.y,18*Math.max(1,.55/k),0,7);c.lineWidth=4*u;c.strokeStyle='#0c8a86';c.stroke();
+    line([[rc.a.x,rc.a.y],mouse],3,'#0c8a86',[8,6]);
+  }
+});
+})();
+</script>
 </body>
 </html>
