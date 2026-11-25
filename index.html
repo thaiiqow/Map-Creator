@@ -7055,5 +7055,275 @@ City.on('change',()=>{
 uiMoney();City.redraw();
 })();
 </script>
+<!-- ===== Плагин: чат жителей («соцсеть») + номер/начальная/конечная остановка отдельными полями.
+     Вставить В САМЫЙ КОНЕЦ, перед </body> (после плагина «Казна и налоги»). ===== -->
+<style id="ch-css">
+#chb{right:12px;top:calc(10px + env(safe-area-inset-top,0px));width:50px;height:50px;padding:0;z-index:9;display:grid;place-items:center}
+#chb.fl{border-radius:50%!important}
+#chb .b{width:100%;height:100%;border-radius:50%!important;font-size:22px;padding:0;display:grid;place-items:center}
+#chn{position:absolute;right:-3px;top:-3px;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:#d7263d;color:#fff;font:800 11px/20px Manrope,system-ui,sans-serif;text-align:center;pointer-events:none;box-shadow:0 2px 6px #0005}
+#chp{right:12px;top:68px;bottom:calc(var(--nh,70px) + 14px);width:min(390px,calc(100% - 24px));z-index:10;display:flex;flex-direction:column;overflow:hidden}
+#chp[hidden]{display:none}
+.ch-h{flex:none;display:flex;align-items:center;gap:8px;padding:12px 8px 8px 16px}
+.ch-h b{flex:1;font-size:16px}.ch-h span{color:var(--mut);font-size:12px}
+#ch-l{flex:1;min-height:0;overflow:auto;padding:0 12px 12px;-webkit-overflow-scrolling:touch}
+.cm{display:flex;gap:10px;padding:8px 0;cursor:pointer}
+.cav{width:38px;height:38px;border-radius:50%;flex:none;display:grid;place-items:center;color:#fff;font-weight:800;font-size:16px}
+.cm>div{flex:1;min-width:0}
+.cn{font-weight:800;font-size:13px;line-height:1.3}
+.cd{color:var(--mut);font-weight:600;font-size:12px}
+.cb{margin-top:4px;padding:9px 12px;border-radius:4px 16px 16px 16px;background:var(--gin,var(--bg));border:1px solid var(--gbd,var(--line));font-size:14px;line-height:1.4;overflow-wrap:anywhere}
+.ct{display:block;margin-top:5px;color:var(--acc);font-weight:700;font-size:13px}
+.cm:hover .cb{border-color:var(--acc)}
+.cmt{padding:30px 10px;text-align:center;color:var(--mut)}
+#top{max-width:calc(100% - 80px)!important}
+@media (min-width:761px){
+ #top{max-width:calc(100% - 360px)!important}
+ #insp{top:68px!important;max-height:calc(100% - 150px)!important}
+}
+@media (max-width:760px){#chp{left:10px;right:10px;width:auto}}
+</style>
+<script>
+(function(){
+const E=City.esc;
+const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+const mpu=()=>((City.S.scale||50)/50);
+const pick=a=>a[Math.floor(Math.random()*a.length)],rnd=(a,b)=>a+Math.random()*(b-a);
+const cen=a=>[a.reduce((s,p)=>s+p[0],0)/a.length,a.reduce((s,p)=>s+p[1],0)/a.length];
+const slug=s=>String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu,'_').replace(/^_+|_+$/g,'');
+const p2=n=>String(Math.floor(n)).padStart(2,'0');
+const fmt=g=>{const d=new Date(Date.UTC(2025,0,1)+g*60000);
+  return d.toLocaleDateString('ru-RU',{timeZone:'UTC',day:'numeric',month:'long',year:'numeric'}).replace(' г.','')+' в '+p2(d.getUTCHours())+':'+p2(d.getUTCMinutes())};
+
+/* ================= ЖИТЕЛИ ================= */
+const M1=['Антон','Дмитрий','Иван','Сергей','Алексей','Михаил','Николай','Артём','Павел','Георгий','Тимур','Роман'];
+const MS=['Чехов','Петров','Смирнов','Кузнецов','Волков','Орлов','Морозов','Соколов','Лебедев','Ким','Новиков','Фёдоров'];
+const F1=['Алиса','Марина','Ольга','Анна','Екатерина','Дарья','Ирина','Софья','Полина','Елена','Наталья','Вера'];
+const FS=['Петрова','Ким','Смирнова','Кузнецова','Волкова','Орлова','Морозова','Соколова','Лебедева','Новикова','Фёдорова','Чехова'];
+function author(){
+  const f=Math.random()<.5,n=f?pick(F1)+' '+pick(FS):pick(M1)+' '+pick(MS);
+  let h=0;for(const ch of n)h=(h*31+ch.charCodeAt(0))>>>0;
+  return{a:n,c:'hsl('+(h%360)+',52%,46%)'};
+}
+
+/* ================= ДАННЫЕ ГОРОДА ================= */
+const houses=()=>City.S.blds.filter(b=>b.t==='house').map(b=>({b,x:b.x+b.w/2,y:b.y+b.h/2}));
+const allStops=()=>(City.S.stops||[]).concat(City.S.pstops||[]);
+const routeNum=n=>{const m=/^(\d+[A-Za-zА-Яа-я]?)/.exec(String(n||'').trim());return m?m[1].toLowerCase():''};
+const SV={
+ fire:[['В нашем районе нет пожарной части — страшно жить.','В случае пожара до нас никто не доедет: рядом нет пожарной части.'],['пожарные','безопасность']],
+ police:[['По ночам во дворе шумят, а полиции поблизости нет.','Нужен полицейский участок рядом с нашими домами.'],['полиция','безопасность']],
+ amb:[['Скорая будет ехать к нам вечность — рядом нет станции скорой помощи.','Бабушке стало плохо, а скорой поблизости нет...'],['скорая','помощь']],
+ garbage:[['Мусор во дворе не вывозят, контейнеры переполнены.','У нас возле дома горы мусора. Где вывоз?'],['мусор','двор']],
+ morgue:[['В районе не хватает службы вывоза тел, это тяжело.','Нужна служба вывоза тел рядом с жилыми кварталами.'],['служба','город']],
+ gas:[['Газовой службы рядом нет — если что, никто не придёт.','Пахнет газом, а аварийной службы поблизости нет.'],['газ','безопасность']]
+};
+const RS=260;
+
+/* ================= ГЕНЕРАТОРЫ СООБЩЕНИЙ ================= */
+function gDist(){
+  const D=(City.S.dists||[]).filter(d=>d.n&&d.pts);if(!D.length)return null;
+  const d=pick(D),c=cen(d.pts),n=d.n;
+  return{t:pick(['Наш район «'+n+'» — самый лучший!','В районе «'+n+'» живётся отлично, никуда не уеду.','Район «'+n+'» — лучшее, что случалось со мной!','Вечером в районе «'+n+'» так уютно!']),
+    tg:['район',slug(n),pick(['ура','люблю_свой_район','лучшие_соседи'])],x:c[0],y:c[1]};
+}
+function gBus(){
+  const S=City.S,st=S.stops||[];if(st.length<2)return null;
+  const used=new Set((S.routes||[]).map(r=>routeNum(r.n)));
+  let a,b,ok=false;
+  for(let i=0;i<30&&!ok;i++){
+    a=pick(st);b=pick(st);if(a===b)continue;
+    if(dst([a.x,a.y],[b.x,b.y])<120)continue;
+    if((S.routes||[]).some(R=>R.s.includes(a.id)&&R.s.includes(b.id)))continue;
+    ok=true;
+  }
+  if(!ok)return null;
+  let num='';
+  for(let i=0;i<20;i++){num=String(1+Math.floor(Math.random()*99))+(Math.random()<.25?pick(['а','б','в']):'');if(!used.has(num))break}
+  return{t:pick(['Предлагаю','Хочу предложить','Прошу рассмотреть'])+' сделать автобусный маршрут №'+num+', начальная остановка: '+a.n+', конечная остановка: '+b.n+'.',
+    tg:['автобус','маршрут',num],x:a.x,y:a.y};
+}
+function gTraffic(){
+  const KM=window.KMX||[25,35,45,55],agg=new Map();
+  (City.vis?City.vis():[]).forEach(q=>{
+    if(q.k!=='car')return;const c=q.ref,R=c.R;if(!R||!R.n)return;
+    let a=agg.get(R);if(!a){a={n:0,s:0,x:q.x,y:q.y};agg.set(R,a)}
+    a.n++;const vm=KM[R.t]*(c.vf||1)/3.6*4/mpu();if(c.v<vm*.3){a.s++;a.x=q.x;a.y=q.y}
+  });
+  const bad=[...agg.entries()].filter(([R,a])=>a.n>=3&&a.s/a.n>=.5);if(!bad.length)return null;
+  const[R,a]=pick(bad);
+  return{t:pick(['Невыносимо стоять в пробках на улице «'+R.n+'»','Опять пробка на «'+R.n+'». Когда это закончится?','Утро на «'+R.n+'» — сплошная стоянка.']),
+    tg:['трафик',pick(['опять_красный','пробки','час_пик']),'решите'],x:a.x,y:a.y};
+}
+function gSvc(){
+  const hs=houses(),sv=City.S.svc||[];if(!hs.length)return null;
+  const unc=t=>hs.filter(h=>!sv.some(s=>s.t===t&&dst([s.x,s.y],[h.x,h.y])<RS));
+  const miss=Object.keys(SV).filter(t=>unc(t).length);if(!miss.length)return null;
+  const t=pick(miss),h=pick(unc(t));
+  let tx=pick(SV[t][0]);
+  if(t==='garbage'&&h.b.nd&&h.b.nd.garbage>100)tx='Мусор у нашего дома вывозить некому, уже выше крыльца!';
+  return{t:tx,tg:SV[t][1].slice(),x:h.x,y:h.y};
+}
+function gEdu(){
+  const S=City.S,hs=houses();if(!hs.length)return null;const h=pick(hs),has=t=>S.blds.some(b=>b.t===t);
+  if(!has('school'))return{t:pick(['Куда отдавать детей в школу? В городе нет ни одной школы.','Нужна школа рядом с домом, детям далеко ходить.']),tg:['школа','дети'],x:h.x,y:h.y};
+  if(!has('kinder'))return{t:'Хочется детский сад поближе — в городе их нет.',tg:['детский_сад','дети'],x:h.x,y:h.y};
+  return null;
+}
+function gCrowd(){
+  const L=allStops().filter(s=>(s.w||0)>=25);if(!L.length)return null;const s=pick(L);
+  return{t:'На остановке «'+s.n+'» уже '+Math.floor(s.w)+' человек, а транспорта всё нет.',tg:['остановка','транспорт','долго_ждать'],x:s.x,y:s.y};
+}
+function gNoStop(){
+  const hs=houses();if(!hs.length)return null;const st=allStops(),h=pick(hs);
+  if(!st.length)return{t:'В городе нет ни одной остановки! Как добираться на работу?',tg:['остановка','транспорт','помогите'],x:h.x,y:h.y};
+  const d=Math.min(...st.map(s=>dst([s.x,s.y],[h.x,h.y])));
+  if(d<350)return null;
+  return{t:'От моего дома до ближайшей остановки идти больше '+Math.round(d*mpu()/10)*10+' м. Сделайте остановку ближе!',tg:['остановка','далеко','решите'],x:h.x,y:h.y};
+}
+function gGood(){
+  const S=City.S,o=[];
+  S.blds.filter(b=>b.t==='park').forEach(b=>{const c=b.pts?cen(b.pts):[b.x+b.w/2,b.y+b.h/2];o.push({t:'Прогулялись по парку'+(b.n?' «'+b.n+'»':'')+' — красота!',tg:['парк','отдых'],x:c[0],y:c[1]})});
+  (S.lms||[]).forEach(l=>o.push({t:'Сводил детей в «'+l.n+'» — впечатления отличные!',tg:['достопримечательность',slug(l.n)],x:l.x,y:l.y}));
+  (S.rstops||[]).forEach(s=>o.push({t:s.sys==='metro'?'Метро — это удобно! Спасибо за станцию «'+s.n+'».':'На поезде от «'+s.n+'» ехать одно удовольствие.',tg:[s.sys==='metro'?'метро':'поезд','спасибо'],x:s.x,y:s.y}));
+  (S.airports||[]).forEach(a=>{if(a.pts&&a.n){const c=cen(a.pts);o.push({t:'Из аэропорта «'+a.n+'» вылетели вовремя, молодцы!',tg:['аэропорт','путешествия'],x:c[0],y:c[1]})}});
+  (S.ports||[]).forEach(p=>o.push({t:'Порт «'+p.n+'» оживил город — вокруг столько работы!',tg:['порт','работа'],x:p.x,y:p.y}));
+  (S.routes||[]).forEach(R=>{const n=routeNum(R.n);if(n&&(R.buses||[]).length){const s=(S.stops||[]).find(x=>x.id===R.s[0]);o.push({t:'Автобус №'+n+' сегодня приехал вовремя. Спасибо!',tg:['автобус','спасибо',n],x:s?s.x:undefined,y:s?s.y:undefined})}});
+  return o.length?pick(o):null;
+}
+function gTax(){
+  const t=City.S.tax;
+  if(typeof t!=='number')return null;
+  if(t>=18)return{t:'Налог '+t+'% — это слишком много, людям нечем платить!',tg:['налоги','дорого']};
+  if(t<=4)return{t:'Налог всего '+t+'% — отличный город для бизнеса, открываю своё дело!',tg:['налоги','бизнес']};
+  return null;
+}
+function gWx(){
+  const w=City.S.wx&&City.S.wx.t,M={rain:['Опять дождь, зонт не спасает.',['погода','дождь']],snow:['Снег пошёл — красота, но дороги бы почистить.',['погода','снег']],
+    hail:['Град бьёт по крышам и машинам! Укрыться негде.',['погода','град']],blizz:['Метель — на улицу не выйти.',['погода','метель']],fog:['Туман такой, что дороги не видно.',['погода','туман']],storm:['Гроза гремит так, что окна дрожат.',['погода','гроза']]};
+  return M[w]?{t:M[w][0],tg:M[w][1]}:null;
+}
+function gWar(){
+  const W=City.S.wars||[],C=City.S.countries||[];if(!W.length)return null;
+  const w=pick(W),A=C.find(c=>c.id===w.a),B=C.find(c=>c.id===w.b);if(!A||!B)return null;
+  return{t:w.civil?'В «'+A.n+'» идёт гражданская война. Страшно...':'Говорят, «'+A.n+'» воюет с «'+B.n+'». Тревожно...',tg:['война','тревожно']};
+}
+const GEN=[[3,gDist],[2,gBus],[3,gTraffic],[3,gSvc],[1.5,gEdu],[2,gCrowd],[1,gNoStop],[2.5,gGood],[1,gTax],[1,gWx],[.8,gWar]];
+function make(){
+  const chat=City.S.chat||[],recent=chat.slice(-14).map(m=>m.t),tot=GEN.reduce((s,g)=>s+g[0],0);
+  for(let i=0;i<14;i++){
+    let r=Math.random()*tot,f=GEN[0][1];for(const g of GEN){r-=g[0];if(r<=0){f=g[1];break}}
+    let m=null;try{m=f()}catch(e){console.error(e)}
+    if(m&&!recent.includes(m.t))return m;
+  }
+  return null;
+}
+function post(m){
+  const S=City.S;S.chat=S.chat||[];S.chatN=(S.chatN||0)+1;
+  const a=author();
+  S.chat.push({id:S.chatN,a:a.a,c:a.c,g:City.gm?City.gm():0,t:m.t,tg:m.tg||[],x:m.x,y:m.y});
+  while(S.chat.length>100)S.chat.shift();
+  dirtyS=true;
+}
+
+/* ================= ИНТЕРФЕЙС ================= */
+$('#wrap').insertAdjacentHTML('beforeend','<div id="chb" class="fl"><button class="b" id="chb-b" aria-label="Чат жителей">💬</button><span id="chn" hidden></span></div>'
+ +'<div id="chp" class="fl" hidden><div class="ch-h"><b>Жители города</b><span id="ch-c"></span><button class="b" id="ch-x" aria-label="Закрыть">✕</button></div><div id="ch-l"></div></div>');
+let open=false,sig='',sigS=null,dirtyS=false,nextAt=null,pulse=null;
+const lastId=S=>(S.chat&&S.chat.length)?S.chat[S.chat.length-1].id:0;
+function render(force){
+  const S=City.S,L=S.chat||[],s=L.length+':'+lastId(S);
+  if(!force&&s===sig&&sigS===S)return;sig=s;sigS=S;
+  const el=$('#ch-l'),near=force||el.scrollHeight-el.scrollTop-el.clientHeight<90;
+  $('#ch-c').textContent=L.length?'сообщений: '+L.length:'';
+  el.innerHTML=L.length?L.map(m=>'<div class="cm" data-id="'+m.id+'"><div class="cav" style="background:'+E(m.c)+'">'+E(m.a.charAt(0))+'</div><div><div class="cn">'+E(m.a)+'<span class="cd">, '+fmt(m.g)+'</span></div><div class="cb">'+E(m.t)
+    +(m.tg&&m.tg.length?'<span class="ct">'+m.tg.map(t=>'#'+E(t)).join(', ')+'</span>':'')+'</div></div></div>').join('')
+    :'<div class="cmt">Пока тихо. Жители скоро заговорят…</div>';
+  if(near)el.scrollTop=el.scrollHeight;
+}
+function badge(){
+  const S=City.S,n=open?0:(S.chat||[]).filter(m=>m.id>(S.chatSeen||0)).length,b=$('#chn');
+  b.hidden=!n;b.textContent=n>99?'99+':n;
+}
+function setOpen(v){
+  open=v;$('#chp').hidden=!v;$('#chb-b').classList.toggle('on',v);
+  if(v){City.S.chatSeen=lastId(City.S);render(true)}
+  badge();
+}
+$('#chb-b').onclick=()=>setOpen(!open);
+$('#ch-x').onclick=()=>setOpen(false);
+$('#ch-l').addEventListener('click',e=>{
+  const el=e.target.closest('[data-id]');if(!el)return;
+  const m=(City.S.chat||[]).find(x=>x.id===+el.dataset.id);if(!m||m.x===undefined)return;
+  if(City.follow&&City.follow()){const fx=$('#fol-x');if(fx)fx.click()}
+  V.k=Math.max(V.k,.8);V.x=cv.clientWidth/2-V.k*m.x;V.y=cv.clientHeight/2-V.k*m.y;
+  pulse={x:m.x,y:m.y,until:Date.now()+3500};dirty=true;
+  if(matchMedia('(max-width:760px)').matches)setOpen(false);
+});
+City.layers.over.push(c=>{
+  if(!pulse)return;const t=Date.now();if(t>pulse.until){pulse=null;return}
+  const k=City.view.k,a=(pulse.until-t)/3500;
+  c.beginPath();c.arc(pulse.x,pulse.y,(18+(1-a)*34)/k,0,7);c.lineWidth=3/k;c.strokeStyle='rgba(215,38,61,'+(.3+.7*a)+')';c.stroke();
+  c.beginPath();c.arc(pulse.x,pulse.y,5/k,0,7);c.fillStyle='#d7263d';c.fill();
+});
+
+/* ================= ЦИКЛ: новые сообщения по игровому времени ================= */
+setInterval(()=>{
+  try{
+    if(!City.gm)return;
+    const S=City.S,gm=City.gm();
+    if(typeof S.chatSeen!=='number')S.chatSeen=lastId(S);
+    if(nextAt===null||Math.abs(gm-nextAt)>120)nextAt=gm+rnd(1.5,4);
+    if(gm>=nextAt&&City.totalPop&&City.totalPop()>0){
+      nextAt=gm+rnd(3,8);
+      const m=make();if(m)post(m);
+    }
+    if(open){if(lastId(S)>S.chatSeen)S.chatSeen=lastId(S);render()}
+    badge();
+    if(pulse)City.redraw();
+  }catch(e){console.error(e)}
+},1000);
+setInterval(()=>{if(dirtyS){dirtyS=false;try{save()}catch(e){}}},10000);
+addEventListener('pagehide',()=>{if(dirtyS){try{save()}catch(e){}}});
+render(true);badge();
+})();
+</script>
+<script>
+/* Плагин: номер маршрута, начальная и конечная остановка — отдельные поля.
+   Внутри название по-прежнему хранится строкой «1а Начальная — Конечная» (табло, легенда и 3D работают как раньше). */
+(function(){
+const E=City.esc;
+const split=o=>{
+  if(o.num!==undefined||o.from!==undefined||o.to!==undefined)return{num:o.num||'',from:o.from||'',to:o.to||''};
+  const s=String(o.n||'').replace(/\s*\(кольцо\)\s*$/,'').trim(),m=/^(\d+[A-Za-zА-Яа-я]?)\s+(.*)$/.exec(s)||/^(\d+[A-Za-zА-Яа-я]?)$/.exec(s);
+  const num=m?m[1]:'',rest=m?(m[2]||''):s,p=rest.split(/\s*[—–]\s*/);
+  return{num,from:p[0]||'',to:p[1]||''};
+};
+const comp=x=>[x.num,x.from].filter(Boolean).join(' ')+(x.to?' — '+x.to:'');
+function form(o,k){
+  const S=City.S,x=split(o);
+  const list=k==='vroutes'?(S.pstops||[]).filter(s=>s.sys===o.sys):(S.stops||[]);
+  const ids=o.s||[],sb=id=>list.find(s=>s.id===id),f=sb(ids[0]),l=sb(ids[ids.length-1]);
+  const inp=(key,lab,ph,dl)=>'<label>'+lab+'<input data-rn="'+key+'" value="'+E(x[key])+'" placeholder="'+E(ph)+'"'+(dl?' list="rn-dl"':'')+' autocomplete="off"></label>';
+  return '<style>#insp label:has(#f-n){display:none}</style><datalist id="rn-dl">'+list.map(s=>'<option value="'+E(s.n)+'">').join('')+'</datalist>'
+    +inp('num','Номер маршрута','например 1а',0)
+    +inp('from','Начальная остановка',f?f.n:'Начальная остановка',1)
+    +inp('to','Конечная остановка',l?l.n:'Конечная остановка',1);
+}
+['routes','vroutes'].forEach(k=>{
+  const prev=City.insp[k];
+  City.insp[k]=o=>form(o,k)+(prev?prev(o):'');
+});
+const I=$('#insp');
+I.addEventListener('focusin',e=>{if(e.target.dataset&&e.target.dataset.rn)City.push()});
+I.addEventListener('input',e=>{
+  const f=e.target.dataset&&e.target.dataset.rn,s=City.sel;
+  if(!f||!s||(s.k!=='routes'&&s.k!=='vroutes'))return;
+  const o=s.o,x=split(o);x[f]=e.target.value;
+  o.num=x.num;o.from=x.from;o.to=x.to;o.n=comp(x);City.changed();
+});
+I.addEventListener('change',e=>{if(e.target.dataset&&e.target.dataset.rn)e.stopImmediatePropagation()},true);
+})();
+</script>
 </body>
 </html>
