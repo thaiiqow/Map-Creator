@@ -6117,5 +6117,195 @@ cv.addEventListener('pointerup',e=>{
 City.redraw();
 })();
 </script>
+<!-- ===== Плагин: режимы дорог (Ровно / Закруглено / Кольцо / Улучшение) + «Железная дорога» и «Пути метро» в разделе «Дороги».
+     Вставить В САМЫЙ КОНЕЦ, перед </body> (после плагина с аллеями и трамваем). ===== -->
+<style id="rm-css">
+#rm{left:50%;transform:translateX(-50%);bottom:calc(var(--nh,70px) + 62px);padding:5px;display:flex;flex-wrap:wrap;gap:4px;justify-content:center;align-items:center;max-width:calc(100% - 20px);z-index:7}
+@media (min-width:761px){#rm{left:calc(50% + 90px)}}
+#lnp{bottom:calc(var(--nh,70px) + 118px)!important}
+#rm .rr{display:flex;gap:4px;width:100%;justify-content:center;flex-wrap:wrap}
+#rm .b{padding:8px 12px}
+</style>
+<script>
+(function(){
+const E=City.esc;
+const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const mpu=()=>((City.S.scale||50)/50);
+const say=t=>{const e=$('#toast');if(!e)return;e.textContent=t;e.hidden=false;clearTimeout(say.t);say.t=setTimeout(()=>e.hidden=true,2800)};
+
+let mode='flat',cd=null,rg=null,dragH=null,upW='type',plant='tree';
+const HINTS={
+  flat:'Ставьте точки дороги. Двойной клик или «Готово» — закончить.',
+  curve:'Нажмите начало и конец дороги, затем потяните или нажмите там, где дорога должна изогнуться. «Готово» — закончить.',
+  ring:'Нажмите центр кольца, затем нажмите ещё раз — это радиус. Размер и форму можно менять в карточке.',
+  up:'Выберите тип в меню ниже (или растения) и нажмите на дорогу.'
+};
+
+/* ---------- железная дорога и пути метро в разделе «Дороги» ---------- */
+City.addLeaf('Дороги',['Железная дорога','rline','train','#2e5aa8']);
+City.addLeaf('Дороги',['Пути метро','rline','metro','#c8102e']);
+
+/* ---------- геометрия ---------- */
+function bzPts(b){
+  const p0=b[0],m=b[1],p2=b[2],c=[2*m[0]-(p0[0]+p2[0])/2,2*m[1]-(p0[1]+p2[1])/2];
+  const n=clamp(Math.ceil((dst(p0,c)+dst(c,p2))/10),8,90),o=[];
+  for(let i=0;i<=n;i++){const t=i/n,u=1-t;o.push([u*u*p0[0]+2*u*t*c[0]+t*t*p2[0],u*u*p0[1]+2*u*t*c[1]+t*t*p2[1]])}
+  o[0]=p0.slice();o[n]=p2.slice();return o;
+}
+function ringPts(g){
+  const per=2*Math.PI*Math.sqrt((g.rx*g.rx+g.ry*g.ry)/2),n=clamp(Math.ceil(per/10),24,120),ca=Math.cos(g.a||0),sa=Math.sin(g.a||0),o=[];
+  for(let i=0;i<n;i++){const t=-2*Math.PI*i/n,x=g.rx*Math.cos(t),y=g.ry*Math.sin(t);o.push([g.cx+x*ca-y*sa,g.cy+x*sa+y*ca])}
+  o.push(o[0].slice());return o;
+}
+const hasBz=o=>!!o&&!!o.bz&&o.pts&&o.pts.length>1&&dst(o.pts[0],o.bz[0])<.5&&dst(o.pts[o.pts.length-1],o.bz[2])<.5;
+
+/* ---------- создание ---------- */
+const rname=()=>RN[tt]+' '+(City.S.roads.length+1);
+function commitCurve(){
+  if(!cd||!cd.b)return;
+  const bz=[cd.a.slice(),cd.m.slice(),cd.b.slice()];cd=null;
+  City.add('roads',{pts:bzPts(bz),t:tt,n:rname(),ow:false,bz});
+  City.redraw();
+}
+function commitRing(r){
+  const g={cx:rg[0],cy:rg[1],rx:Math.max(r,12),ry:Math.max(r,12),a:0};rg=null;
+  const o={pts:ringPts(g),t:tt,n:'Кольцо '+(City.S.roads.length+1),ow:true,ring:g};
+  City.add('roads',o);
+  if(RN[o.t]!=='Аллея'){o.ow=true;o.rev=false}
+  City.changed();City.updateUI();
+}
+function upgrade(o){
+  if(upW==='type'){
+    if(o.t===tt){say('Эта дорога уже такого типа');return}
+    const was=RN[o.t],k=RN[tt];City.push();o.t=tt;
+    if(k==='Аллея'){o.ow=false;o.rev=false;o.pl=o.pl||plant}
+    else if(k==='Дорога')o.ow=true;
+    else if(was==='Дорога')o.ow=false;
+    say('Тип дороги изменён');
+  }else{
+    if(RN[o.t]!=='Аллея'){say('Растения меняются только на аллее');return}
+    City.push();o.pl=plant;say('Растения изменены');
+  }
+  City.select('roads',o);City.changed();City.updateUI();
+}
+
+/* ---------- ввод (перехват до основной логики) ---------- */
+const wrap=$('#wrap');
+wrap.addEventListener('pointerdown',e=>{
+  if(e.target!==cv||e.button!==0||!e.isPrimary||e.defaultPrevented)return;
+  const T=City.tool,k=V.k,w=raw(e);
+  if((T==='select'||T==='road')&&sel&&sel.k==='roads'&&hasBz(sel.o)&&dst(w,sel.o.bz[1])<16/k){
+    City.push();dragH={o:sel.o};try{cv.setPointerCapture(e.pointerId)}catch(x){}
+    e.stopPropagation();e.preventDefault();return;
+  }
+  if(T!=='road'||mode==='flat')return;
+  const p=snp(w);e.stopPropagation();e.preventDefault();
+  if(mode==='curve'){
+    if(!cd)cd={a:p};
+    else if(!cd.b){if(dst(cd.a,p)>=6/k){cd.b=p;cd.m=[(cd.a[0]+p[0])/2,(cd.a[1]+p[1])/2]}}
+    else{cd.m=w;dragH={draft:1};try{cv.setPointerCapture(e.pointerId)}catch(x){}}
+  }else if(mode==='ring'){
+    if(!rg)rg=p;else if(dst(rg,p)>=8/k)commitRing(dst(rg,p));
+  }else if(mode==='up'){
+    const h=pick(w,false);
+    if(h&&h.k==='roads')upgrade(h.o);else say('Нажмите на дорогу');
+  }
+  City.redraw();
+},{capture:true});
+wrap.addEventListener('pointermove',e=>{
+  if(!dragH||e.target!==cv)return;const w=raw(e);
+  if(dragH.draft){if(cd&&cd.b)cd.m=w}
+  else{dragH.o.bz[1]=w;dragH.o.pts=bzPts(dragH.o.bz)}
+  City.redraw();
+},{capture:true});
+const endDrag=()=>{if(!dragH)return;const d=dragH;dragH=null;if(!d.draft)City.changed()};
+addEventListener('pointerup',endDrag);addEventListener('pointercancel',endDrag);
+addEventListener('keydown',e=>{
+  if(/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)||City.tool!=='road')return;
+  if(e.key==='Enter')commitCurve();
+  if(e.key==='Escape'){cd=rg=null;City.redraw()}
+});
+
+/* ---------- панель режимов (над нижним меню) ---------- */
+wrap.insertAdjacentHTML('beforeend',
+ '<div id="rm" class="fl" hidden>'
+ +'<div class="rr"><button class="b on" data-rm="flat">Ровно</button><button class="b" data-rm="curve">Закруглено</button><button class="b" data-rm="ring">Кольцо</button><button class="b" data-rm="up">Улучшение</button></div>'
+ +'<div class="rr" id="rm-x" hidden><button class="b p" id="rm-ok">Готово</button><button class="b" id="rm-no">Отмена</button></div>'
+ +'<div class="rr" id="rm-u" hidden><button class="b on" data-u="type">Тип дороги</button><button class="b" data-u="plant">Растения аллеи</button></div>'
+ +'<div class="rr" id="rm-p" hidden><button class="b on" data-p="tree">Деревья</button><button class="b" data-p="palm">Пальмы</button><button class="b" data-p="sakura">Сакура</button></div>'
+ +'</div>');
+const rm=$('#rm');
+function setMode(m){mode=m;cd=rg=null;HINT.road=HINTS[m];sync();City.updateUI();City.redraw()}
+function sync(){
+  rm.querySelectorAll('[data-rm]').forEach(b=>b.classList.toggle('on',b.dataset.rm===mode));
+  rm.querySelectorAll('[data-u]').forEach(b=>b.classList.toggle('on',b.dataset.u===upW));
+  rm.querySelectorAll('[data-p]').forEach(b=>b.classList.toggle('on',b.dataset.p===plant));
+  $('#rm-x').hidden=!(mode==='curve'&&cd&&cd.b);
+  $('#rm-u').hidden=mode!=='up';
+  $('#rm-p').hidden=!(mode==='up'&&upW==='plant');
+}
+rm.addEventListener('pointerdown',e=>e.stopPropagation());
+rm.addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.rm)setMode(b.dataset.rm);
+  else if(b.dataset.u){upW=b.dataset.u;sync()}
+  else if(b.dataset.p){plant=b.dataset.p;sync()}
+  else if(b.id==='rm-ok'){commitCurve();sync()}
+  else if(b.id==='rm-no'){cd=null;sync();City.redraw()}
+});
+HINT.road=HINTS.flat;
+setInterval(()=>{
+  const on=City.tool==='road';rm.hidden=!on;
+  if(!on){cd=rg=null;return}
+  sync();
+},150);
+
+/* ---------- карточка дороги: изогнутая и кольцевая ---------- */
+const prevIns=City.insp.roads;
+City.insp.roads=o=>{
+  let h=prevIns?prevIns(o):'';
+  if(hasBz(o))h+='<div style="font-size:13px;color:var(--mut)">Закругление: потяните белую точку на дороге.</div>';
+  if(o.ring){
+    const g=o.ring,m=mpu();
+    h+='<label>Ширина кольца, м<input id="rg-x" type="number" min="10" step="5" value="'+Math.round(g.rx*2*m)+'"></label>'
+      +'<label>Высота кольца, м<input id="rg-y" type="number" min="10" step="5" value="'+Math.round(g.ry*2*m)+'"></label>'
+      +'<label>Поворот, °<input id="rg-a" type="number" step="5" value="'+Math.round((g.a||0)*180/Math.PI)+'"></label>';
+  }
+  return h;
+};
+$('#insp').addEventListener('change',e=>{
+  const id=e.target.id,s=City.sel;
+  if(!/^rg-/.test(id)||!s||s.k!=='roads'||!s.o.ring)return;
+  const o=s.o,g=o.ring,v=+e.target.value;if(isNaN(v))return;
+  if(id==='rg-x')g.rx=Math.max(5,v/mpu()/2);
+  else if(id==='rg-y')g.ry=Math.max(5,v/mpu()/2);
+  else g.a=v*Math.PI/180;
+  o.pts=ringPts(g);City.changed();City.updateUI();
+});
+
+/* ---------- отрисовка: набросок, ручка изгиба ---------- */
+const handle=(c,p,k)=>{
+  c.beginPath();c.arc(p[0],p[1],9/k,0,7);c.fillStyle='#fff';c.fill();c.lineWidth=2.5/k;c.strokeStyle='#0c8a86';c.stroke();
+  c.beginPath();c.arc(p[0],p[1],3/k,0,7);c.fillStyle='#0c8a86';c.fill();
+};
+City.layers.over.push((c,P)=>{
+  const k=V.k;
+  if(City.tool==='road'&&P.cas[tt]!==undefined){
+    const T=tt,draw=pts=>{c.globalAlpha=.7;line(pts,RW[T]+4,P.cas[T]);line(pts,RW[T],P.fil[T]);c.globalAlpha=1};
+    if(mode==='curve'&&cd){
+      if(!cd.b)draw([cd.a,mouse]);
+      else{draw(bzPts([cd.a,cd.m,cd.b]));handle(c,cd.m,k)}
+    }
+    if(mode==='ring'&&rg){
+      const r=Math.max(dst(rg,mouse),12);draw(ringPts({cx:rg[0],cy:rg[1],rx:r,ry:r,a:0}));
+      c.beginPath();c.arc(rg[0],rg[1],4/k,0,7);c.fillStyle='#0c8a86';c.fill();
+    }
+  }
+  if((City.tool==='select'||City.tool==='road')&&sel&&sel.k==='roads'&&hasBz(sel.o))handle(c,sel.o.bz[1],k);
+});
+City.redraw();
+})();
+</script>
 </body>
 </html>
