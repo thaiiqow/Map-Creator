@@ -871,7 +871,7 @@ const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
 /* Плагин: машины в трафике (правостороннее движение, повороты на перекрёстках, светофоры) */
 (function(){
   const mpu=()=>((City.S.scale||50)/50);
-  const KM=[25,35,45,55];                                   /* скорость по типу дороги, км/ч */
+  const KM=(window.KMX||(window.KMX=[25,35,45,55]));                                   /* скорость по типу дороги, км/ч */
   /* Модели: img — файл рядом с index.html, l — длина в метрах, ws/rw — лобовое и заднее стекло (доли длины) */
   const CARS=[
     {n:'Toyota Corolla Fielder',img:'tcf.WEBP',l:4.4,ws:[.08,.24],rw:[-.43,-.38]},
@@ -1057,7 +1057,7 @@ const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
 <script>
 /* Плагин: автобусы по полосам и светофорам, расписание, вариации маршрута, прибытие на остановках; 1 игровая минута = 25 с */
 (function(){
-const E=City.esc,MIN=25,DW=4,KMH=[25,35,45,55];
+const E=City.esc,MIN=25,DW=4,KMH=(window.KMX||(window.KMX=[25,35,45,55]));
 const mpu=()=>((City.S.scale||50)/50),clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const sb=id=>City.S.stops.find(s=>s.id===id);
 const tripC=new Map();City.on('change',()=>tripC.clear());
@@ -4303,7 +4303,7 @@ const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
 const lp=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];
 const lenPts=a=>{let s=0;for(let i=1;i<a.length;i++)s+=dst(a[i],a[i-1]);return s};
 /* время игры: 1 игровая минута = 25 с; пешком 5 м/с => 125 м за игровую минуту */
-const WALK=125,DW=4,WAIT=3,KMH=[25,35,45,55];
+const WALK=125,DW=4,WAIT=3,KMH=(window.KMX||(window.KMX=[25,35,45,55]));
 const SPD=k=>k/3.6*4*25;                 /* м за игровую минуту при скорости k км/ч */
 const fm=m=>{const r=Math.round(m);return r<1?'меньше минуты':r<60?r+' мин':Math.floor(r/60)+' ч '+(r%60)+' мин'};
 const fd=m=>m<100?Math.round(m)+' м':m<1000?Math.round(m/10)*10+' м':(m/1000).toFixed(1).replace('.',',')+' км';
@@ -5383,7 +5383,7 @@ const TCOL=['#2ecc71','#f5a623','#e63946','#8b0a1a'],TNAME=['Низкий','Ср
 sTr.innerHTML='<button class="chip" id="ui-tr">Показать трафик</button><div style="margin-top:8px">'+TCOL.map((c,i)=>'<div class="tl"><i style="background:'+c+'"></i>'+TNAME[i]+'</div>').join('')+'</div>';
 const trb=$('#ui-tr');const trSync=()=>{trb.classList.toggle('on',traffic);trb.textContent=traffic?'Трафик включён':'Показать трафик'};
 trb.onclick=()=>{traffic=!traffic;SS('ui:traffic',traffic?'1':'0');trSync();City.redraw()};trSync();
-const tmap=new WeakMap();let tAt=0;const KMH=[25,35,45,55];
+const tmap=new WeakMap();let tAt=0;const KMH=(window.KMX||(window.KMX=[25,35,45,55]));
 function tcalc(){
   const agg=new Map();
   City.vis().forEach(q=>{if(q.k!=='car')return;const c=q.ref,R=c.R;if(!R)return;let a=agg.get(R);if(!a){a={n:0,s:0};agg.set(R,a)}
@@ -5528,6 +5528,593 @@ const lastDw=new WeakMap();
   }))}catch(e){}
   requestAnimationFrame(lp);
 })();
+})();
+</script>
+<script>
+/* ===== Плагин: меню («👆» и «✏️» кругами), новые дороги (аллея, проспект 2–8 полос, трамвай/троллейбус),
+   трамвай «Витязь-М», троллейбус «MAZ 206T». Вставить В САМЫЙ КОНЕЦ, перед </body>.
+   ТРЕБУЕТСЯ один раз «Найти и заменить всё»: [25,35,45,55]  →  (window.KMX||(window.KMX=[25,35,45,55]))  (4 места).
+   Фото рядом с index.html: vityaz_m.png (трамвай), maz206t.png (троллейбус). ===== */
+(function(){
+const E=City.esc,F='Manrope,system-ui,sans-serif';
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+const mpu=()=>((City.S.scale||50)/50);
+const bu=()=>City.bu?City.bu():Math.max(1/mpu(),1.5);
+const rrc=(c,x,y,w,h,r)=>{c.beginPath();(c.roundRect||c.rect).call(c,x,y,w,h,r)};
+const KMX=window.KMX||(window.KMX=[25,35,45,55]);
+const MW=4;                                   /* ширина земли между встречными полосами аллеи */
+let ver=0;City.on('change',()=>{ver++});
+const say=t=>{const e=$('#toast');if(!e)return;e.textContent=t;e.hidden=false;clearTimeout(say.t);say.t=setTimeout(()=>e.hidden=true,3000)};
+
+/* ================= типы дорог ================= */
+const KIND={road:'Дорога',street:'Улица',alley:'Аллея',pros:'Проспект',hwy:'Шоссе'};
+const SPD={road:25,street:35,alley:35,pros:45,hwy:55};
+const SPEC=[],IDX=new Map(),kf=(k,n,x)=>k+n+'|'+x;
+const reg=(k,n,x)=>{IDX.set(kf(k,n,x),SPEC.length);SPEC.push({k,n,x})};
+reg('road',1,0);reg('street',2,0);reg('pros',4,0);reg('hwy',6,0);      /* 0..3 как в старых картах */
+const GEO=[['road',1],['street',2]];
+for(let n=2;n<=8;n++)GEO.push(['pros',n]);
+[2,4,6,8].forEach(n=>GEO.push(['alley',n]));GEO.push(['hwy',6]);
+for(let x=0;x<3;x++)GEO.forEach(([k,n])=>{if(!IDX.has(kf(k,n,x)))reg(k,n,x)});
+const idxOf=(k,n,x)=>IDX.get(kf(k,n,x));
+const RAILN=['','с трамвайной линией','с троллейбусными путями'];
+SPEC.forEach((s,i)=>{
+  RW[i]=4*s.n+4+(s.k==='alley'?MW:0);LN[i]=s.n;RN[i]=KIND[s.k];KMX[i]=SPD[s.k];
+  ROAD[i]=KIND[s.k]+((s.k==='pros'||s.k==='alley')?' · '+s.n+' пол.':'')+(s.x?' '+RAILN[s.x]:'');
+  if(i>3){const big=s.k==='pros',hw=s.k==='hwy';
+    LIGHT.cas[i]=hw?'#cf7f22':big?'#d2ad4a':'#c9c4b8';LIGHT.fil[i]=hw?'#ffd48f':big?'#fff1c2':'#fff';
+    DARK.cas[i]=hw?'#6e4414':big?'#5e4f26':'#11161a';DARK.fil[i]=hw?'#68451f':big?'#574b2c':'#394147'}
+});
+const rail=R=>{const s=SPEC[R.t];return s?s.x:0};
+const isAlley=R=>{const s=SPEC[R.t];return !!s&&s.k==='alley'};
+
+/* новая дорога: направление и растения по умолчанию */
+const _add=add;
+add=function(k,o){if(k==='roads'){const s=SPEC[o.t];if(s){o.ow=(s.k==='road');if(s.k==='alley')o.pl='tree'}}return _add(k,o)};
+City.add=add;
+/* разметка аллеи: полосы считаются от разделителя */
+const _marks=marks;
+marks=function(R,P){
+  const s=SPEC[R.t];if(!s||s.k!=='alley')return _marks(R,P);
+  const lw=(RW[R.t]-MW)/s.n;
+  for(let q=1;q<s.n/2;q++)[1,-1].forEach(g=>line(offs(R.pts,g*(MW/2+q*lw)),1,P.lab+'88',[6,7]));
+};
+
+/* ================= меню: раздел «Дороги» ================= */
+const DEF={road:1,street:2,alley:4,pros:4,hwy:6},COL={road:'#9aa3a8',street:'#9aa3a8',alley:'#7cb86b',pros:'#e0c36a',hwy:'#e59a3a'};
+const ORDER=['road','street','alley','pros','hwy'];
+const leaf=(nm,k,x)=>[nm,'road',idxOf(k,DEF[k],x),COL[k]];
+const grp=TREE.find(g=>g[0]==='Дороги'&&Array.isArray(g[1]));
+if(grp){
+  const keep=grp[1].filter(n=>n[1]!=='road'&&!Array.isArray(n[1]));
+  grp[1]=ORDER.map(k=>leaf(KIND[k],k,0)).concat([
+    ['С трамвайной линией',ORDER.map(k=>leaf(KIND[k]+' с трамвайной линией',k,1))],
+    ['С троллейбусными путями',ORDER.map(k=>leaf(KIND[k]+' с троллейбусными путями',k,2))]
+  ],keep);
+  renderTree();
+}
+
+/* ================= «👆» и «✏️» кругами по краям нижнего меню ================= */
+document.head.insertAdjacentHTML('beforeend',`<style id="pl-css">
+.nc{position:fixed!important;width:48px;height:48px;padding:0!important;display:grid;place-items:center;border-radius:50%!important;z-index:15}
+.nc .b{width:100%;height:100%;border-radius:50%!important;font-size:21px;padding:0;display:grid;place-items:center}
+#nav .nr:first-child{max-width:calc(100vw - 132px)}
+@media (min-width:761px){#nav .nr:first-child{max-width:calc(100vw - 512px)}}
+#lnp{left:50%;transform:translateX(-50%);bottom:calc(var(--nh,70px) + 62px);padding:6px 10px;display:flex;gap:6px;align-items:center;font-weight:700;z-index:6}
+#lnp .chip{border:1px solid var(--gbd,var(--line));background:var(--gin,var(--bg));color:var(--ink);font:inherit;font-weight:700;padding:6px 12px;border-radius:999px;cursor:pointer}
+#lnp .chip.on{background:var(--acc);color:var(--accink)}
+#prb{left:50%;transform:translateX(-50%);bottom:calc(var(--nh,70px) + 62px);padding:8px 14px;display:flex;gap:8px;align-items:center;z-index:6}
+</style>`);
+$('#wrap').insertAdjacentHTML('beforeend','<div id="nc1" class="fl nc"></div><div id="nc2" class="fl nc"></div><div id="lnp" class="fl" hidden></div><div id="prb" class="fl" hidden><span id="prn"></span><button id="prok" class="b p">Готово</button><button id="prno" class="b">Отмена</button></div>');
+{
+  const sb=document.querySelector('[data-g="select"]'),eb=document.querySelector('[data-g="erase"]');
+  if(sb){sb.textContent='👆';sb.title='Выбрать';sb.setAttribute('aria-label','Выбрать');$('#nc1').appendChild(sb)}
+  if(eb){eb.textContent='✏️';eb.title='Ластик';eb.setAttribute('aria-label','Ластик');$('#nc2').appendChild(eb)}
+  const nav=$('#nav'),c1=$('#nc1'),c2=$('#nc2');
+  let pk='';
+  (function pos(){
+    const r0=nav&&nav.firstElementChild;
+    if(r0){const r=r0.getBoundingClientRect();
+      if(r.width>0){const y=Math.round(r.top+r.height/2-24),a=Math.round(r.left-56),b=Math.round(r.right+8),key=a+','+b+','+y;
+        if(key!==pk){pk=key;c1.style.left=a+'px';c2.style.left=b+'px';c1.style.top=c2.style.top=y+'px'}}}
+    requestAnimationFrame(pos);
+  })();
+  /* убираем серые заглушки «Трамвай/Троллейбус — скоро» */
+  const strip=()=>{if(!nav)return;nav.querySelectorAll('.nb[disabled]').forEach(b=>{if(/^(Трамвай|Троллейбус)/.test(b.textContent.trim()))b.remove()})};
+  if(nav){new MutationObserver(strip).observe(nav,{childList:true,subtree:true});strip()}
+}
+
+/* ================= выбор числа полос (аллея, проспект) ================= */
+const lnp=$('#lnp');let lsig='';
+function lnSync(){
+  const s=City.tool==='road'?SPEC[tt]:null,show=!!s&&(s.k==='alley'||s.k==='pros');
+  lnp.hidden=!show;if(!show){lsig='';return}
+  const sig=s.k+s.n+s.x;if(sig===lsig)return;lsig=sig;
+  lnp.innerHTML='<span>Полос:</span>'+[2,4,6,8].map(n=>'<button class="chip'+(n===s.n?' on':'')+'" data-n="'+n+'">'+n+'</button>').join('');
+}
+setInterval(lnSync,200);
+lnp.addEventListener('click',e=>{
+  const b=e.target.closest('[data-n]'),s=SPEC[tt];if(!b||!s)return;
+  const ni=idxOf(s.k,+b.dataset.n,s.x);if(ni===undefined)return;
+  document.querySelectorAll('#nav .nb[data-tool="road"]').forEach(x=>{const q=SPEC[+x.dataset.tt];if(q&&q.k===s.k&&q.x===s.x)x.dataset.tt=String(ni)});
+  setTool('road',ni);lsig='';lnSync();
+});
+
+/* ================= карточка дороги ================= */
+const fixN=(k,n,ow)=>{if(k==='road')return 1;if(k==='street')return 2;if(k==='hwy')return 6;
+  n=clamp(n,2,8);if((k==='alley'||!ow)&&n%2)n++;return clamp(n,2,8)};
+const prevIns=City.insp.roads;
+City.insp.roads=o=>{
+  const s=SPEC[o.t]||SPEC[0];let h=prevIns?prevIns(o):'';
+  h+='<style>#insp label:has(#f-t){display:none}'+(s.k==='alley'?'#insp label:has(#f-ow),#f-rev{display:none}':'')+'</style>';
+  h+='<label>Вид<select id="rd-k">'+Object.keys(KIND).map(k=>'<option value="'+k+'"'+(k===s.k?' selected':'')+'>'+KIND[k]+'</option>').join('')+'</select></label>';
+  if(s.k==='alley'||s.k==='pros'){
+    const ns=(s.k==='pros'&&o.ow)?[2,3,4,5,6,7,8]:[2,4,6,8];
+    h+='<label>Количество полос<select id="rd-n">'+ns.map(n=>'<option'+(n===s.n?' selected':'')+'>'+n+'</option>').join('')+'</select></label>';
+  }
+  h+='<label>Линия<select id="rd-x"><option value="0"'+(s.x===0?' selected':'')+'>Нет</option><option value="1"'+(s.x===1?' selected':'')+'>Трамвайная линия</option><option value="2"'+(s.x===2?' selected':'')+'>Троллейбусные пути</option></select></label>';
+  if(s.x&&o.ow)h+='<label>Направление линии<select id="rd-w"><option value="with"'+(o.rw==='against'?'':' selected')+'>Вдоль движения</option><option value="against"'+(o.rw==='against'?' selected':'')+'>Против движения</option></select></label>';
+  if(s.k==='alley')h+='<label>Растения на земле<select id="rd-p"><option value="tree"'+((o.pl||'tree')==='tree'?' selected':'')+'>Деревья</option><option value="palm"'+(o.pl==='palm'?' selected':'')+'>Пальмы</option><option value="sakura"'+(o.pl==='sakura'?' selected':'')+'>Сакура</option></select></label>';
+  return h;
+};
+$('#insp').addEventListener('change',e=>{
+  const id=e.target.id,sl=City.sel;
+  if(!/^(rd-|f-ow)/.test(id)||!sl||sl.k!=='roads')return;
+  const o=sl.o,s=SPEC[o.t];if(!s)return;
+  let k=s.k,n=s.n,x=s.x;
+  if(id==='rd-k'){k=e.target.value;n=fixN(k,(s.k==='alley'||s.k==='pros')?n:4,o.ow)}
+  else if(id==='rd-n')n=+e.target.value;
+  else if(id==='rd-x')x=+e.target.value;
+  else if(id==='rd-w')o.rw=e.target.value;
+  else if(id==='rd-p')o.pl=e.target.value;
+  else if(id==='f-ow')n=fixN(k,n,o.ow);
+  if(k==='alley'){o.ow=false;o.rev=false;o.pl=o.pl||'tree'}
+  if(k==='road'&&id==='rd-k')o.ow=true;
+  const ni=idxOf(k,n,x);if(ni!==undefined)o.t=ni;
+  City.changed();City.updateUI();
+});
+
+/* ================= поверхность: земля и растения аллеи, трамвайные рельсы ================= */
+const OC=new WeakMap();
+function offc(R,e){let m=OC.get(R.pts);if(!m||m.v!==ver){m={v:ver,o:new Map()};OC.set(R.pts,m)}
+  const k=e.toFixed(2);let a=m.o.get(k);if(!a){a=Math.abs(e)<.001?R.pts:offs(R.pts,e);m.o.set(k,a)}return a}
+const tramEE=R=>isAlley(R)?MW/2+2.2:1.7;
+const tramEs=R=>R.ow?[0]:[-tramEE(R),tramEE(R)];
+const laneE=R=>{const s=SPEC[R.t],W=RW[R.t];return s.k==='alley'?W/2-(4+4/s.n)/2:(W-W/s.n)/2};
+const tdir=R=>(R.rev?-1:1)*(R.rw==='against'?-1:1);
+const trolEs=R=>{const e=laneE(R);return R.ow?[tdir(R)*e]:[e,-e]};
+const MD=new WeakMap();
+function medData(R){
+  let m=MD.get(R.pts);if(m&&m.v===ver&&m.t===R.t)return m;
+  const others=City.S.roads.filter(o=>o!==R&&o.pts.length>1);
+  const near=p=>others.some(o=>{const r=RW[o.t]/2+3;for(let i=1;i<o.pts.length;i++)if(dseg(p,o.pts[i-1],o.pts[i])<r)return true;return false});
+  const s=[],tr=[],P=R.pts;let acc=0,nx=8;
+  for(let i=1;i<P.length;i++){
+    const a=P[i-1],b=P[i],L=dst(a,b);if(!L)continue;const n=Math.max(1,Math.ceil(L/6));
+    for(let q=0;q<n;q++){const p=[a[0]+(b[0]-a[0])*q/n,a[1]+(b[1]-a[1])*q/n];s.push({p,ok:!near(p)})}
+    while(nx-acc<=L){const t=(nx-acc)/L,p=[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];tr.push({p,ok:!near(p),i:tr.length});nx+=16}
+    acc+=L;
+  }
+  const e=P[P.length-1];s.push({p:e,ok:!near(e)});
+  m={v:ver,t:R.t,s,tr};MD.set(R.pts,m);return m;
+}
+const hv=i=>((i*374761393+12345)>>>0)%1000/1000;
+function plant(c,x,y,t,sd,dark){
+  if(t==='palm'){
+    const r=3.4;c.save();c.translate(x,y);c.rotate(sd*6.28);c.fillStyle=dark?'#2a7a36':'#2f9440';c.strokeStyle='#0004';c.lineWidth=.4;
+    for(let i=0;i<9;i++){c.rotate(Math.PI*2/9);c.beginPath();c.ellipse(r*.55,0,r*.5,r*.16,0,0,7);c.fill();c.stroke()}
+    c.beginPath();c.arc(0,0,r*.22,0,7);c.fillStyle='#7a5a3a';c.fill();c.restore();
+  }else if(t==='sakura'){
+    const r=2.9;c.fillStyle=dark?'#b85f83':'#f2a2c0';c.beginPath();c.arc(x,y,r,0,7);c.fill();
+    c.fillStyle=dark?'#d27a9d':'#f9c6d9';
+    for(let i=0;i<5;i++){const a=sd*6.28+i*1.2566;c.beginPath();c.arc(x+Math.cos(a)*r*.45,y+Math.sin(a)*r*.45,r*.5,0,7);c.fill()}
+    c.fillStyle='#ffffffcc';for(let i=0;i<6;i++){const a=sd*9+i*1.047;c.beginPath();c.arc(x+Math.cos(a)*r*.55,y+Math.sin(a)*r*.55,.4,0,7);c.fill()}
+    c.lineWidth=.5;c.strokeStyle='#0003';c.beginPath();c.arc(x,y,r,0,7);c.stroke();
+  }else{
+    const r=2.8;c.beginPath();c.arc(x,y,r,0,7);c.fillStyle=dark?'#2f5a30':'#4c8a47';c.fill();c.lineWidth=.5;c.strokeStyle='#0004';c.stroke();
+    c.beginPath();c.arc(x-r*.25,y-r*.25,r*.6,0,7);c.fillStyle=dark?'#3a6d3b':'#69a85f';c.fill();
+  }
+}
+function surf(c,P){
+  const S=City.S,k=City.view.k,dark=dk.matches;
+  c.lineCap='butt';c.lineJoin='round';
+  S.roads.forEach(R=>{
+    const s=SPEC[R.t];if(!s)return;
+    if(s.k==='alley'){
+      const d=medData(R);let run=[];
+      const fl=()=>{if(run.length>1){line(run,MW+2.4,dark?'#2a3236':'#b9b4a6');line(run,MW,dark?'#3f6a3f':'#8fbf73')}run=[]};
+      d.s.forEach(q=>{if(q.ok)run.push(q.p);else fl()});fl();
+      if(k>.12)d.tr.forEach(q=>{if(q.ok)plant(c,q.p[0],q.p[1],R.pl||'tree',hv(q.i),dark)});
+    }
+    if(s.x===1){
+      tramEs(R).forEach(e=>{
+        line(offc(R,e),3.4,dark?'#46423c':'#b3a998');
+        line(offc(R,e),3.4,dark?'#6b5a48':'#6c5a46',[1,2.6]);
+        line(offc(R,e+.75),.6,dark?'#9aa0a4':'#e3e6e8');line(offc(R,e-.75),.6,dark?'#9aa0a4':'#e3e6e8');
+      });
+    }
+  });
+  c.lineCap='round';
+}
+City.layers.over.unshift(surf);
+
+/* ================= электротранспорт ================= */
+const SYS={
+  tram:{n:'Трамвай',x:1,kmh:40,col:'#d7263d',img:'vityaz_m.png',model:'Витязь-М',tl:'трамвайной линии'},
+  trol:{n:'Троллейбус',x:2,kmh:40,col:'#1f78d1',img:'maz206t.png',model:'MAZ 206T',tl:'троллейбусных путей'}
+};
+const HEAD={l:9.6,cap:70},MID={l:8.4,cap:50},JG=.5,TROL={l:12,w:2.55,cap:68},TW=2.5;
+const nSec=R=>clamp(Math.round(+R.cars>0?+R.cars:3),3,6);
+const capOf=R=>R.sys==='tram'?2*HEAD.cap+(nSec(R)-2)*MID.cap:TROL.cap;
+const lenOf=R=>(R.sys==='tram'?(2*HEAD.l+(nSec(R)-2)*MID.l+(nSec(R)-1)*JG):TROL.l)*bu();
+const nVeh=R=>(R.cnt===undefined||R.cnt==='')?2:clamp(Math.round(+R.cnt)||0,0,12);
+const okDir=(R,dir)=>!R.ow||dir===tdir(R);
+const latE=(R,x)=>x===1?(R.ow?0:tramEE(R)):laneE(R);
+const stops_=()=>City.S.pstops||[],routes_=()=>City.S.proutes||[];
+const stopOf=id=>stops_().find(s=>s.id===id);
+const hw=b=>(b.pop===undefined||b.pop==='')?Math.max(1,Math.round(b.w*b.h*mpu()*mpu()/25)):Math.max(0,+b.pop||0);
+const NC=new WeakMap();
+function nearPop(s){let c=NC.get(s);if(c&&c.v===ver)return c.n;let n=0;City.S.blds.forEach(b=>{if(b.t==='house'&&Math.hypot(b.x+b.w/2-s.x,b.y+b.h/2-s.y)<160)n+=hw(b)});NC.set(s,{v:ver,n});return n}
+function nearRoad(sys,p,maxD){
+  const x=SYS[sys].x;let best=null;
+  City.S.roads.forEach(R=>{if(rail(R)!==x)return;for(let i=1;i<R.pts.length;i++){const d=dseg(p,R.pts[i-1],R.pts[i]);if(!best||d<best.d)best={d,R}}});
+  return best&&best.d<=maxD?best:null;
+}
+
+/* --- граф путей --- */
+const lerp=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];
+function proj(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=clamp(t,0,1);const q=[a[0]+dx*t,a[1]+dy*t];return{t,q,d:dst(p,q)}}
+const K=p=>(Math.round(p[0]*10)/10)+','+(Math.round(p[1]*10)/10);
+function buildG(sys){
+  const S=City.S,x=SYS[sys].x,roads=S.roads.filter(R=>rail(R)===x&&R.pts.length>1),segs=[];
+  roads.forEach(R=>{for(let i=1;i<R.pts.length;i++)segs.push({a:R.pts[i-1],b:R.pts[i],R,sp:[[0,R.pts[i-1]],[1,R.pts[i]]]})});
+  for(let i=0;i<segs.length;i++)for(let j=i+1;j<segs.length;j++){
+    const s=segs[i],u=segs[j];if(s.R===u.R)continue;
+    const r=[s.b[0]-s.a[0],s.b[1]-s.a[1]],q=[u.b[0]-u.a[0],u.b[1]-u.a[1]],den=r[0]*q[1]-r[1]*q[0];
+    if(Math.abs(den)<1e-9)continue;
+    const w=[u.a[0]-s.a[0],u.a[1]-s.a[1]],t=(w[0]*q[1]-w[1]*q[0])/den,v=(w[0]*r[1]-w[1]*r[0])/den,e=1e-6;
+    if(t<-e||t>1+e||v<-e||v>1+e)continue;
+    const p=lerp(s.a,s.b,clamp(t,0,1));s.sp.push([t,p]);u.sp.push([v,p]);
+  }
+  const links=[];
+  roads.forEach(R=>[R.pts[0],R.pts[R.pts.length-1]].forEach(e=>{
+    let best=null;segs.forEach(s=>{if(s.R===R)return;const r=proj(e,s.a,s.b);if(r.d<8&&(!best||r.d<best.r.d))best={s,r}});
+    if(best&&best.r.d>.05){best.s.sp.push([best.r.t,best.r.q]);links.push([e,best.r.q,R])}
+  }));
+  const sp_={};
+  stops_().forEach(st=>{
+    if(st.sys!==sys)return;let best=null;
+    segs.forEach(s=>{const r=proj([st.x,st.y],s.a,s.b);if(!best||r.d<best.r.d)best={s,r}});
+    if(best&&best.r.d<=70){best.s.sp.push([best.r.t,best.r.q]);sp_[st.id]=best.r.q}
+  });
+  const idx=new Map(),pts=[],adj=[];
+  const node=p=>{const k=K(p);let i=idx.get(k);if(i===undefined){i=pts.length;idx.set(k,i);pts.push(p);adj.push([])}return i};
+  segs.forEach(s=>{
+    s.sp.sort((p,q)=>p[0]-q[0]);
+    for(let i=1;i<s.sp.length;i++){
+      const p=s.sp[i-1][1],q=s.sp[i][1],a=node(p),b=node(q);if(a===b)continue;
+      const w=dst(p,q),e=latE(s.R,x);
+      if(okDir(s.R,1))adj[a].push({v:b,w,e});
+      if(okDir(s.R,-1))adj[b].push({v:a,w,e});
+    }
+  });
+  links.forEach(([e,q])=>{const a=node(e),b=node(q),w=dst(e,q);adj[a].push({v:b,w,e:0});adj[b].push({v:a,w,e:0})});
+  const sni={};for(const id in sp_)sni[id]=node(sp_[id]);
+  return{S,v:ver,pts,adj,sni};
+}
+const Gc={};
+const graph=sys=>{const g=Gc[sys];if(g&&g.S===City.S&&g.v===ver)return g;return Gc[sys]=buildG(sys)};
+function dij(g,s,t){
+  const n=g.pts.length,d=new Float64Array(n).fill(Infinity),pr=new Int32Array(n).fill(-1),pe=new Array(n),done=new Uint8Array(n);d[s]=0;
+  for(;;){
+    let u=-1;for(let i=0;i<n;i++)if(!done[i]&&d[i]<Infinity&&(u<0||d[i]<d[u]))u=i;
+    if(u<0||u===t)break;done[u]=1;
+    for(const e of g.adj[u])if(d[u]+e.w<d[e.v]){d[e.v]=d[u]+e.w;pr[e.v]=u;pe[e.v]=e}
+  }
+  if(d[t]===Infinity)return null;
+  const nodes=[],edges=[];
+  for(let u=t;u>=0;u=pr[u]){nodes.push(u);if(u!==s&&pe[u])edges.push(pe[u])}
+  return{nodes:nodes.reverse(),edges:edges.reverse()};
+}
+function offv(p,d){
+  const nm=(a,b)=>{const x=b[0]-a[0],y=b[1]-a[1],l=Math.hypot(x,y)||1;return[-y/l,x/l]};
+  return p.map((q,i)=>{
+    const n1=i?nm(p[i-1],q):null,n2=i<p.length-1?nm(q,p[i+1]):null,e=d[i];
+    if(!n1)return[q[0]+n2[0]*e,q[1]+n2[1]*e];if(!n2)return[q[0]+n1[0]*e,q[1]+n1[1]*e];
+    let mx=n1[0]+n2[0],my=n1[1]+n2[1];const ml=Math.hypot(mx,my)||1;mx/=ml;my/=ml;
+    const cc=Math.max(.5,mx*n1[0]+my*n1[1]);return[q[0]+mx*e/cc,q[1]+my*e/cc];
+  });
+}
+function buildTrip(g,ids,loop){
+  if(!g||ids.length<2)return null;
+  const list=loop?ids.concat(ids[0]):ids,pts=[],es=[],six=[];let prev=-1;
+  for(let i=0;i<list.length;i++){
+    const nd=g.sni[list[i]];if(nd===undefined)return null;
+    if(i===0){pts.push(g.pts[nd]);six.push(0);prev=nd;continue}
+    if(nd!==prev){const r=dij(g,prev,nd);if(!r)return null;r.nodes.slice(1).forEach((q,j)=>{pts.push(g.pts[q]);es.push(r.edges[j].e)})}
+    six.push(pts.length-1);prev=nd;
+  }
+  if(pts.length<2)return null;
+  const n=pts.length,ev=pts.map((_,i)=>i===0?es[0]:i===n-1?es[n-2]:(es[i-1]+es[i])/2),op=offv(pts,ev),c=[0];
+  for(let i=1;i<n;i++)c.push(c[i-1]+dst(op[i],op[i-1]));
+  const lt=[];
+  (City.S.lights||[]).forEach(l=>{
+    let b=null;for(let i=1;i<n;i++){const d=dseg([l.x,l.y],op[i-1],op[i]);if(!b||d<b.d)b={d,i}}
+    if(b&&b.d<22){const a=op[b.i-1],z=op[b.i],dx=z[0]-a[0],dy=z[1]-a[1],q=dx*dx+dy*dy,t=q?clamp(((l.x-a[0])*dx+(l.y-a[1])*dy)/q,0,1):0;lt.push(c[b.i-1]+t*(c[b.i]-c[b.i-1]))}
+  });
+  return{pts:op,c,L:c[n-1],loop:!!loop,lt,stops:list.map((id,k)=>({id,s:c[six[k]]}))};
+}
+const TCa=new WeakMap();
+function trips(R){
+  const key=R.s.join(',')+'|'+(R.loop?1:0)+'|'+ver+'|'+R.sys;let c=TCa.get(R);
+  if(c&&c.key===key&&c.S===City.S)return c.t;
+  const g=graph(R.sys),F=buildTrip(g,R.s,!!R.loop),B=(R.loop||!F)?null:buildTrip(g,R.s.slice().reverse(),false),t={F,B};
+  TCa.set(R,{key,S:City.S,t});return t;
+}
+function at(tr,d){
+  const L=tr.L,cc=tr.c;d=tr.loop?((d%L)+L)%L:clamp(d,0,L);
+  let a=1,b=cc.length-1;while(a<b){const m=(a+b)>>1;if(cc[m]<d)a=m+1;else b=m}
+  const p=tr.pts[a-1],q=tr.pts[a],l=(cc[a]-cc[a-1])||1,t=clamp((d-cc[a-1])/l,0,1);
+  return{x:p[0]+(q[0]-p[0])*t,y:p[1]+(q[1]-p[1])*t,an:Math.atan2(q[1]-p[1],q[0]-p[0])};
+}
+function targets(tr,hl,loop){
+  if(tr.tg&&tr.tgh===hl)return tr.tg;
+  tr.tgh=hl;return tr.tg=tr.stops.map(s=>loop?s.s:(tr.L>2*hl?clamp(s.s,hl,tr.L-hl):tr.L/2));
+}
+
+/* --- состояние составов --- */
+const VS=new WeakMap();
+function vehicles(R){
+  const T=trips(R);if(!T||!T.F)return null;
+  const n=nVeh(R),sig=(T.F.L|0)+'|'+n+'|'+(T.B?T.B.L|0:0)+'|'+nSec(R)+'|'+R.loop;let st=VS.get(R);
+  if(!st||st.sig!==sig){
+    const arr=[],tg=targets(T.F,lenOf(R)/2,R.loop);
+    for(let k=0;k<n;k++){const d=T.F.L*(k+.5)/n;let i=tg.findIndex(x=>x>d);if(i<0)i=tg.length-1;
+      arr.push({leg:0,d,i,v:0,dw:Math.random()*4,load:Math.round(Math.random()*capOf(R)*.3),fin:false,x:0,y:0,an:0,Lw:0})}
+    st={sig,arr};VS.set(R,st);
+  }
+  return{T,st};
+}
+function exch(v,R,id){
+  const s=stopOf(id);if(!s)return;
+  v.load-=Math.round(v.load*(.25+Math.random()*.3));
+  const b=Math.min(Math.floor(s.w||0),capOf(R)-v.load);if(b>0){s.w-=b;v.load+=b}
+}
+function step(v,R,T,dt,all){
+  const tr=v.leg?T.B:T.F;if(!tr)return;
+  const hl=lenOf(R)/2,loop=!!R.loop,tg=targets(tr,hl,loop);
+  if(v.dw>0){
+    v.dw-=dt;v.v=0;
+    if(v.dw<=0&&v.fin){
+      v.fin=false;
+      if(loop){v.d=0;v.i=1}
+      else{if(T.B)v.leg=1-v.leg;const t2=v.leg?T.B:T.F;v.d=targets(t2,hl,false)[0];v.i=1}
+    }
+    return;
+  }
+  if(v.i>=tg.length){v.i=tg.length-1}
+  const vmax=SYS[R.sys].kmh*.85/3.6*4/mpu();let tv=vmax,lim=1e9;
+  const rem=tg[v.i]-v.d;
+  if(rem<=.6){
+    v.d=tg[v.i];v.v=0;exch(v,R,tr.stops[v.i].id);
+    v.dw=6*(.7+Math.random()*.6);v.i++;
+    if(v.i>=tr.stops.length){v.fin=true;v.dw=loop?6:10}
+    return;
+  }
+  tv=Math.min(tv,Math.sqrt(2*(vmax/3)*rem)+2);lim=rem;
+  /* светофоры */
+  const q=at(tr,v.d+hl*.9),axis=Math.abs(Math.cos(q.an))>Math.abs(Math.sin(q.an))?0:1;
+  for(const s of tr.lt){
+    let dd=s-(v.d+hl);if(loop&&dd<-tr.L/2)dd+=tr.L;if(dd<-1||dd>40)continue;
+    const ph=City.lightPhase?City.lightPhase(axis):'g';if(ph==='g'||(ph==='y'&&dd<12))continue;
+    tv=Math.min(tv,vmax*Math.min(1,(dd-4)/24));lim=Math.min(lim,Math.max(0,dd-4));
+  }
+  /* состав впереди */
+  const ca=Math.cos(v.an),sa=Math.sin(v.an),W=3*bu();
+  all.forEach(o=>{
+    if(o===v)return;const dx=o.x-v.x,dy=o.y-v.y,f=ca*dx+sa*dy,la=Math.abs(-sa*dx+ca*dy),need=(v.Lw+o.Lw)/2;
+    if(f>0&&f<need+40&&la<W&&Math.cos(o.an-v.an)>.3){const gap=f-need;tv=Math.min(tv,vmax*Math.max(0,gap/20));lim=Math.min(lim,Math.max(0,gap-2))}
+  });
+  v.v+=(tv-v.v)*Math.min(1,dt*2.5);
+  v.d+=Math.min(lim,Math.max(0,v.v)*dt);
+}
+function place(v,T){const tr=v.leg?T.B:T.F;if(!tr)return;const q=at(tr,v.d);v.x=q.x;v.y=q.y;v.an=q.an}
+
+/* пассажиры на остановках */
+let gmL=null;
+function waitTick(){
+  const g=City.gm?City.gm():0;if(gmL===null)gmL=g;const dm=Math.max(0,g-gmL);gmL=g;
+  if(dm>0&&dm<30)stops_().forEach(s=>{s.w=Math.min(150,(s.w||0)+(3+nearPop(s)*.07)/60*dm)});
+}
+let last=performance.now();
+(function loop(){
+  const n=performance.now(),dt=Math.min(.1,Math.max(0,(n-last)/1000));last=n;
+  try{
+    waitTick();const all=[],list=[];
+    routes_().forEach(R=>{const o=vehicles(R);if(!o)return;const L=lenOf(R);o.st.arr.forEach(v=>{v.Lw=L;all.push(v);list.push([v,R,o.T])})});
+    list.forEach(([v,R,T])=>{step(v,R,T,dt,all);place(v,T)});
+    if(list.length)City.redraw();
+  }catch(e){console.error(e)}
+  requestAnimationFrame(loop);
+})();
+
+/* --- остановки и маршруты: регистрация --- */
+let rl=null;
+City.register({key:'pstops',label:'Остановка (трамвай/троллейбус)',tool:'pstop',
+  hint:'Нажмите рядом с трамвайной линией или троллейбусными путями, чтобы поставить остановку.',
+  click(p,r){
+    const sys=String(tt);if(!SYS[sys])return;
+    if(!nearRoad(sys,p,70)){say('Рядом нет '+SYS[sys].tl);return}
+    const n=stops_().filter(s=>s.sys===sys).length+1;
+    City.add('pstops',{id:City.S.id++,x:p[0],y:p[1],sys,n:'Остановка '+(sys==='tram'?'трамвая':'троллейбуса')+' '+n,w:0});
+  },
+  hit:(p,r)=>stops_().find(s=>dst([s.x,s.y],p)<r+10),
+  inspector:o=>{
+    const serving=routes_().filter(R=>R.s.includes(o.id)).map(R=>E(R.n)).join(', ');
+    return '<div style="font-size:13px;color:var(--mut)">Ожидают: <b style="color:var(--ink)">'+Math.floor(o.w||0)+'</b> чел.<br>Жителей рядом: ≈'+Math.round(nearPop(o)).toLocaleString('ru-RU')+(serving?'<br>Маршруты: <b style="color:var(--ink)">'+serving+'</b>':'')+'</div>';
+  }});
+City.register({key:'proutes',label:'Маршрут трамвая/троллейбуса',tool:'proute',
+  hint:'Нажимайте остановки по порядку. Первая остановка ещё раз — замкнуть кольцо. «Готово» — закончить.',
+  click(p,r){
+    const sys=String(tt);if(!SYS[sys])return;
+    if(rl&&rl.sys!==sys)rl=null;
+    const k=City.view.k;let best=null;
+    stops_().forEach(s=>{if(s.sys!==sys)return;const d=dst([s.x,s.y],r);if(d<22/k&&(!best||d<best.d))best={d,s}});
+    if(!best)return;const id=best.s.id;
+    if(!rl){rl={sys,s:[id],loop:false};return}
+    if(id===rl.s[0]&&rl.s.length>2){rl.loop=true;endRoute();return}
+    if(id!==rl.s[rl.s.length-1])rl.s.push(id);
+  },
+  hit:(p,r)=>routes_().find(R=>{const T=trips(R);return T&&T.F&&T.F.pts.slice(1).some((q,i)=>dseg(p,T.F.pts[i],q)<r+3)}),
+  inspector:o=>{
+    const T=trips(o),m=T&&T.F?T.F.L*mpu():0,len=m<1000?Math.round(m)+' м':(m/1000).toFixed(2).replace('.',',')+' км',S0=SYS[o.sys];
+    return '<div style="font-size:13px;color:var(--mut)">'+S0.n+' · '+E(S0.model)+'<br>Остановок: <b style="color:var(--ink)">'+o.s.length+'</b>'+(o.loop?', кольцо':'')+'<br>Длина: <b style="color:var(--ink)">'+len+'</b></div>'
+    +(T&&T.F?'':'<div class="er" style="color:var(--red);font-size:13px">Нет пути: остановки должны стоять у '+S0.tl+', а дороги — быть соединены (учтите направление на односторонних).</div>')
+    +(o.sys==='tram'?'<label>Секций в составе (3–6)<input type="number" min="3" max="6" data-f="cars" value="'+nSec(o)+'"></label>':'')
+    +'<label>'+(o.sys==='tram'?'Составов':'Троллейбусов')+' на маршруте<input type="number" min="0" max="12" data-f="cnt" value="'+nVeh(o)+'"></label>'
+    +'<label>Цвет линии<input type="color" data-f="c" value="'+E(o.c)+'" style="height:34px;padding:2px"></label>'
+    +'<div style="font-size:13px;color:var(--mut)">Вместимость: <b style="color:var(--ink)">'+capOf(o)+' чел.</b>'+(o.sys==='tram'?' (головной 70, средний 50)':' (одна машина)')+'</div>';
+  }});
+function endRoute(){
+  if(!rl)return;const a=rl;rl=null;
+  if(a.s.length>1){const n=routes_().filter(R=>R.sys===a.sys).length+1;
+    City.add('proutes',{n:SYS[a.sys].n+' '+n,c:RC[routes_().length%6],sys:a.sys,s:a.s,loop:!!a.loop,cnt:2,cars:3})}
+  City.redraw();
+}
+$('#prok').onclick=()=>endRoute();$('#prno').onclick=()=>{rl=null;City.redraw()};
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;if(e.key==='Enter'&&City.tool==='proute')endRoute();if(e.key==='Escape'){rl=null;City.redraw()}});
+[['Остановка трамвая','pstop','tram'],['Маршрут трамвая','proute','tram']].forEach(a=>City.addLeaf('Транспорт/Трамвай',[a[0],a[1],a[2],SYS.tram.col]));
+[['Остановка троллейбуса','pstop','trol'],['Маршрут троллейбуса','proute','trol']].forEach(a=>City.addLeaf('Транспорт/Троллейбус',[a[0],a[1],a[2],SYS.trol.col]));
+
+/* уборка: удалённые остановки выпадают из маршрутов */
+let cleaning=false;
+City.on('change',()=>{
+  if(cleaning)return;const S=City.S;if(!S.proutes)return;
+  const ids=new Set((S.pstops||[]).map(s=>s.id));let ch=false;
+  S.proutes.forEach(R=>{const n=R.s.filter(id=>ids.has(id));if(n.length!==R.s.length){R.s=n;ch=true}});
+  const k=S.proutes.filter(R=>R.s.length>1);if(k.length!==S.proutes.length){S.proutes=k;ch=true}
+  if(ch){if(sel&&sel.k==='proutes'&&!S.proutes.includes(sel.o)){sel=null;City.updateUI()}cleaning=true;City.changed();cleaning=false}
+});
+
+/* ================= рисование техники ================= */
+function tramSec(c,L,W,head){
+  c.lineJoin='round';c.lineWidth=.8;c.strokeStyle='#000a';
+  rrc(c,-L/2,-W/2,L,W,W*.14);c.fillStyle='#c9242c';c.fill();c.stroke();
+  const x0=-L/2+W*.1,x1=head?L/2-L*.24:L/2-W*.1;
+  rrc(c,x0,-W/2+W*.13,x1-x0,W*.74,W*.06);c.fillStyle='#8f969d';c.fill();c.lineWidth=.6;c.strokeStyle='#0006';c.stroke();
+  c.fillStyle='#ffffffcc';c.fillRect(x0,-W/2+W*.07,x1-x0,W*.035);c.fillRect(x0,W/2-W*.105,x1-x0,W*.035);
+  const box=(a,b,y0,y1)=>{rrc(c,L*a,W*y0,L*(b-a),W*(y1-y0),W*.05);c.fillStyle='#eef1f3';c.fill();c.lineWidth=.6;c.strokeStyle='#0007';c.stroke()};
+  const fan=(x,y)=>{c.beginPath();c.arc(L*x,W*y,W*.07,0,7);c.fillStyle='#2a3035';c.fill()};
+  if(head){
+    box(-.44,-.14,-.3,.3);fan(-.36,-.12);fan(-.36,.12);fan(-.24,-.12);fan(-.24,.12);
+    c.fillStyle='#2a2f33';c.fillRect(-L*.07,-W*.1,L*.07,W*.2);                    /* основание токоприёмника */
+    c.lineWidth=Math.max(.8,W*.22);c.strokeStyle='#23282c';
+    c.beginPath();c.moveTo(0,-W*.08);c.lineTo(L*.1,0);c.lineTo(0,W*.08);c.stroke();
+    c.beginPath();c.moveTo(L*.1,-W*.32);c.lineTo(L*.1,W*.32);c.stroke();
+    c.fillStyle='#1c2428';c.fillRect(L*.43,-W*.34,L*.035,W*.68);                    /* лобовое стекло */
+    c.fillStyle='#fff6c8';c.fillRect(L*.495,-W*.42,L*.012,W*.12);c.fillRect(L*.495,W*.3,L*.012,W*.12);
+  }else{
+    box(-.38,-.12,-.3,.3);fan(-.28,-.12);fan(-.28,.12);
+    box(.05,.3,-.3,.3);fan(.12,-.12);fan(.12,.12);fan(.23,-.12);fan(.23,.12);
+  }
+}
+function trolBody(c,L,W){
+  c.lineJoin='round';c.lineWidth=.9;c.strokeStyle='#000a';
+  rrc(c,-L/2,-W/2,L,W,W*.16);c.fillStyle='#f4f6f7';c.fill();c.stroke();
+  rrc(c,-L/2+W*.07,-W/2+W*.08,L-W*.14,W*.84,W*.08);c.fillStyle='#8c9298';c.fill();c.lineWidth=.6;c.strokeStyle='#0006';c.stroke();
+  c.strokeStyle='#ffffff55';c.beginPath();c.moveTo(-L/2+W*.2,-W*.22);c.lineTo(L/2-W*.3,-W*.22);c.moveTo(-L/2+W*.2,W*.22);c.lineTo(L/2-W*.3,W*.22);c.stroke();
+  [[.216,.345],[.608,.73]].forEach(([a,b])=>{rrc(c,(a-.5)*L,-W*.2,(b-a)*L,W*.4,W*.07);c.fillStyle='#d9dee0';c.fill();c.lineWidth=.6;c.strokeStyle='#0007';c.stroke();
+    c.strokeStyle='#ffffff99';c.beginPath();c.moveTo((a-.5)*L+W*.15,W*.12);c.lineTo((a-.5)*L+W*.4,-W*.12);c.stroke()});
+  c.fillStyle='#33383c';c.fillRect(.4*L,-W*.38,.035*L,W*.76);                        /* решётка у лобового */
+  c.strokeStyle='#8c9298';c.lineWidth=.5;for(let i=1;i<4;i++){const y=-W*.38+W*.76*i/4;c.beginPath();c.moveTo(.4*L,y);c.lineTo(.435*L,y);c.stroke()}
+  c.fillStyle='#bfe3f2';c.fillRect(L*.465,-W*.36,L*.03,W*.72);
+  c.fillStyle='#14232b';c.fillRect(-L*.5+W*.1,-W/2+1,L*.08,W*.06);
+}
+const GW=b=>.55*b;
+let hits=[],poles=[];
+function drawVeh(c,R,T,v,b){
+  const tr=v.leg?T.B:T.F;if(!tr)return;
+  if(R.sys==='trol'){
+    const L=TROL.l*b,W=TROL.w*b;
+    c.save();c.translate(v.x,v.y);c.rotate(v.an);trolBody(c,L,W);c.restore();
+    poles.push([v.x,v.y,v.an,L,b]);hits.push({x:v.x,y:v.y,r:Math.max(L/2,10),v,R});
+    return;
+  }
+  const N=nSec(R),ls=[];for(let j=0;j<N;j++)ls.push((j===0||j===N-1?HEAD.l:MID.l)*b);
+  const jg=JG*b,W=TW*b,Lt=ls.reduce((a,x)=>a+x,0)+(N-1)*jg;let s=v.d+Lt/2;
+  for(let j=0;j<N;j++){
+    const l=ls[j],q=at(tr,s-l/2);
+    c.save();c.translate(q.x,q.y);c.rotate(q.an+(j===N-1?Math.PI:0));tramSec(c,l,W,j===0||j===N-1);c.restore();
+    s-=l;
+    if(j<N-1){const q2=at(tr,s-jg/2);c.save();c.translate(q2.x,q2.y);c.rotate(q2.an);c.fillStyle='#2a2f33';c.fillRect(-jg/2,-W*.42,jg,W*.84);c.restore();s-=jg}
+  }
+  hits.push({x:v.x,y:v.y,r:Math.max(Lt/2,12),v,R});
+}
+const MC=new WeakMap();
+function masts(R){
+  let m=MC.get(R.pts);if(m&&m.v===ver&&m.t===R.t)return m.a;
+  const a=[],P=R.pts,off=RW[R.t]/2+2.5;let acc=0,nx=20;
+  for(let i=1;i<P.length;i++){
+    const A=P[i-1],B=P[i],L=dst(A,B);if(!L)continue;const tx=(B[0]-A[0])/L,ty=(B[1]-A[1])/L;
+    while(nx-acc<=L){const t=nx-acc;a.push([A[0]+tx*t-ty*off,A[1]+ty*t+tx*off]);nx+=60}
+    acc+=L;
+  }
+  m={v:ver,t:R.t,a};MC.set(R.pts,m);return a;
+}
+City.layers.over.push((c,P)=>{
+  const S=City.S,k=City.view.k,u=1/k,sc=Math.max(1,.55/k),b=bu(),sl=City.sel;
+  hits=[];poles=[];
+  if(rl&&(City.tool!=='proute'||String(tt)!==rl.sys))rl=null;
+  $('#prb').hidden=!rl;if(rl)$('#prn').textContent='Остановок: '+rl.s.length;
+  /* остановки */
+  stops_().forEach(s=>{
+    const col=SYS[s.sys].col,on=sl&&sl.o===s;
+    c.save();c.translate(s.x,s.y);c.scale(sc,sc);
+    if(on){c.beginPath();c.arc(0,0,20,0,7);c.fillStyle='#0c8a8670';c.fill()}
+    rrc(c,-8,-8,16,16,4);c.fillStyle=col;c.fill();c.lineWidth=2;c.strokeStyle='#fff';c.stroke();
+    c.fillStyle='#fff';c.font='800 9px '+F;c.textAlign='center';c.textBaseline='middle';c.fillText(s.sys==='tram'?'Т':'Тб',0,.5);c.restore();
+    if(k>.5&&s.n){c.font='700 '+(11*sc)+'px '+F;c.textAlign='left';c.textBaseline='middle';c.lineWidth=3.5*sc;c.lineJoin='round';c.strokeStyle=P.bg;c.strokeText(s.n,s.x+12*sc,s.y+1);c.fillStyle=P.ink;c.fillText(s.n,s.x+12*sc,s.y+1)}
+    const w=Math.floor(s.w||0);
+    if(w&&k>.45){c.font='700 '+(10*sc)+'px '+F;const tw=c.measureText(w).width+8*sc,x=s.x+8*sc,y=s.y-24*sc;rrc(c,x,y,tw,14*sc,7*sc);c.fillStyle='#0c8a86';c.fill();c.fillStyle='#fff';c.textAlign='center';c.fillText(w,x+tw/2,y+7.5*sc)}
+    if(City.tool==='proute'&&String(tt)===s.sys){c.beginPath();c.arc(s.x,s.y,22*sc,0,7);c.lineWidth=2*u;c.strokeStyle='#0c8a86';c.setLineDash([5*u,4*u]);c.stroke();c.setLineDash([])}
+  });
+  /* линия маршрута: выделенного или рисуемого */
+  routes_().forEach(R=>{if((sl&&sl.o===R)||City.tool==='proute'){const T=trips(R);if(T&&T.F){if(sl&&sl.o===R)line(T.F.pts,10,'#0c8a8670');line(T.F.pts,2,R.c+'cc',[8,6])}}});
+  if(rl){const q=rl.s.map(stopOf).filter(Boolean).map(s=>[s.x,s.y]);if(q.length)line(q.concat([mouse]),3,'#0c8a86',[8,6])}
+  /* техника */
+  routes_().forEach(R=>{const o=vehicles(R);if(!o)return;o.st.arr.forEach(v=>{if(v.x||v.y)drawVeh(c,R,o.T,v,b)})});
+  /* провода: троллейбусы (две линии над каждой полосой) и трамвайный контактный провод */
+  c.lineCap='round';
+  S.roads.forEach(R=>{
+    const s=SPEC[R.t];if(!s||!s.x)return;
+    if(s.x===2)trolEs(R).forEach(e=>[-GW(b),GW(b)].forEach(g=>line(offc(R,e+g),.7,'rgba(35,40,44,.7)')));
+    else tramEs(R).forEach(e=>line(offc(R,e),.6,'rgba(35,40,44,.45)'));
+    if(s.x===2&&k>.3)masts(R).forEach(p=>{c.beginPath();c.arc(p[0],p[1],1.3,0,7);c.fillStyle='#3a4147';c.fill();c.lineWidth=.6;c.strokeStyle='#fff';c.stroke()});
+  });
+  /* штанги троллейбусов */
+  poles.forEach(([x,y,an,L,bb])=>{
+    c.save();c.translate(x,y);c.rotate(an);c.strokeStyle='#2b3034';c.lineWidth=.9;
+    const bx=-.15*L,ex=bx-7.2*bb,g=GW(bb);
+    [-1,1].forEach(sg=>{c.beginPath();c.moveTo(bx,sg*.1*TROL.w*bb);c.lineTo(ex,sg*g);c.stroke();c.beginPath();c.arc(ex,sg*g,.9,0,7);c.fillStyle='#111';c.fill()});
+    c.restore();
+  });
+  /* подпись заполненности */
+  if(k>1.2)hits.forEach(h=>{const t=h.v.load+'/'+capOf(h.R);c.font='700 '+(10*u)+'px '+F;c.textAlign='center';c.textBaseline='middle';c.lineWidth=3*u;c.lineJoin='round';c.strokeStyle=P.bg;c.strokeText(t,h.x,h.y-h.r-4*u);c.fillStyle=P.ink;c.fillText(t,h.x,h.y-h.r-4*u)});
+});
+
+/* окно с фото при нажатии на состав */
+let dn=null;
+cv.addEventListener('pointerdown',e=>{dn=[e.clientX,e.clientY]});
+cv.addEventListener('pointerup',e=>{
+  if(!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
+  const V=City.view,x=(e.offsetX-V.x)/V.k,y=(e.offsetY-V.y)/V.k,h=[...hits].reverse().find(q=>Math.hypot(q.x-x,q.y-y)<q.r);
+  if(!h)return;
+  const S0=SYS[h.R.sys];sel=null;City.updateUI();
+  $('#pop').innerHTML='<b>'+E(S0.model)+'</b><div style="color:var(--mut)">'+E(h.R.n)+'</div><div style="color:var(--mut)">В салоне: '+h.v.load+' / '+capOf(h.R)+'</div><img src="'+E(S0.img)+'" alt="'+E(S0.model)+'" onerror="this.outerHTML=\'<small>Нет файла '+E(S0.img)+' рядом с index.html</small>\'"><div class="row"><button id="pc7" class="b">Закрыть</button></div>';
+  $('#pop').hidden=false;$('#pc7').onclick=()=>$('#pop').hidden=true;
+});
+City.redraw();
 })();
 </script>
 </body>
