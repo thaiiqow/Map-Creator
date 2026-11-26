@@ -7735,5 +7735,548 @@ setInterval(()=>{try{render()}catch(e){console.error(e)}},700);
 render();
 })();
 </script>
+<!-- ===== Плагин: ДТП (машины, автобусы, трамваи, троллейбусы) и авиакатастрофы.
+     Вставить В САМЫЙ КОНЕЦ, перед </body> (после плагина «суточный трафик»).
+     Что делает: транспорт реально попадает в аварии (замирает, дымит, горит), вызываются полиция/скорая/пожарные
+     из ваших служб и едут по дорогам, за аварией встаёт пробка, жители пишут в чат. Самолёт может упасть:
+     виден полёт вниз, взрыв, пожар, воронка, разрушения. Настройки и кнопки теста — слева, раздел «ДТП и катастрофы». ===== -->
+<script>
+(function(){
+const E=City.esc,F='Manrope,system-ui,sans-serif',TC=10;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const dst=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const ri=(a,b)=>Math.floor(rnd(a,b+1));
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const mpu=()=>((City.S.scale||50)/50);
+const bu=()=>City.bu?City.bu():Math.max(1/mpu(),1.5);
+const now=()=>performance.now()/1000;
+const gmn=()=>City.gm?City.gm():0;
+const n0=v=>Math.round(v).toLocaleString('ru-RU');
+const p2=n=>String(Math.floor(n)).padStart(2,'0');
+const hm=g=>p2(g/60%24)+':'+p2(g%60);
+const say=t=>{const e=$('#toast');if(!e)return;e.textContent=t;e.hidden=false;clearTimeout(say.t);say.t=setTimeout(()=>e.hidden=true,3200)};
+const rrc=(c,x,y,w,h,r)=>{c.beginPath();(c.roundRect||c.rect).call(c,x,y,w,h,r)};
+
+/* ================= НАСТРОЙКИ (меняйте здесь) ================= */
+const CFG={
+ BASE_VEH:3000,   /* чем больше, тем РЕЖЕ ДТП (транспорт × игровые минуты на одно ДТП) */
+ BASE_AIR:20000,  /* то же для самолётов в воздухе */
+ MAX_ROAD:4,      /* сколько ДТП одновременно */
+ STN_CAP:2,       /* сколько машин одновременно выпускает одна станция */
+ CALL:[.5,2.5],   /* через сколько игровых минут после аварии вызвана служба */
+ SPEED:{police:80,amb:85,fire:70},   /* км/ч */
+ REPAIR:[0,150000,600000]            /* ремонт автобуса/трамвая/троллейбуса по тяжести 1/2/3 */
+};
+let cfg={on:true,f:1};try{Object.assign(cfg,JSON.parse(localStorage.getItem('cr:cfg')||'{}'))}catch(e){}
+const saveCfg=()=>{try{localStorage.setItem('cr:cfg',JSON.stringify(cfg))}catch(e){}};
+const WXM={clear:1,rain:1.8,snow:2.2,hail:2,blizz:3,fog:2.2,storm:2.5};
+const WXA={clear:1,rain:1.5,snow:2,hail:3,blizz:4,fog:2.5,storm:6};
+const PL={'Boeing 737':{l:39.5,sp:35.8,seats:189},'Airbus A321':{l:44.5,sp:35.8,seats:236},'Boeing 777':{l:73.9,sp:64.8,seats:400},'Airbus A319':{l:33.8,sp:34.1,seats:156}};
+const PUBN={bus:'Автобус',tram:'Трамвай',trol:'Троллейбус'};
+const WT={road:{police:[8,15],amb:[6,12],fire:[10,20]},air:{police:[40,70],amb:[25,45],fire:[30,60]}};
+const LATE={police:[25,60,120,240],amb:[20,50,100],fire:[15,40,90]};
+
+/* ================= СОСТОЯНИЕ ================= */
+const INCS=[],UN=[],INV=new Set(),HOLD=new Set(),busy=new Map();
+let uid=1,Sref=null,rail=[],dirtyChat=false;
+const GHOST={pts:[[-1e6,-1e6],[-1e6+1,-1e6]],t:0,ow:true,n:''};   /* «несуществующая дорога»: машина с неё удаляется из симуляции */
+const cstat=()=>City.S.crash||(City.S.crash={n:0,inj:0,dead:0,air:0});
+const wxn=()=>(City.S.wx&&City.S.wx.t)||'clear';
+const night=()=>{const m=((gmn()%1440)+1440)%1440;return m>=1405||m<420};
+const rush=()=>!!(window.TRAF&&window.TRAF.level&&window.TRAF.level()===2);
+
+/* трамваи и троллейбусы: берём их состояние из отрисовки */
+const _draw=draw;
+draw=function(){
+  const oP=Array.prototype.push,nv=[];
+  Array.prototype.push=function(){const o=arguments[0];
+    if(arguments.length===1&&o&&typeof o==='object'&&o.st&&o.b&&o.R&&o.R.sys&&typeof o.r==='number'&&typeof o.x==='number'&&o.L===undefined)oP.call(nv,o);
+    return oP.apply(this,arguments)};
+  try{_draw()}finally{Array.prototype.push=oP;rail=nv}
+};
+/* автобус, стоящий в аварии, не уезжает */
+const _hb=City.holdBus;City.holdBus=b=>HOLD.has(b)||(_hb?_hb(b):false);
+
+/* ================= ЧАТ ЖИТЕЛЕЙ ================= */
+const M1=['Антон','Дмитрий','Иван','Сергей','Алексей','Михаил','Николай','Артём','Павел','Георгий','Тимур','Роман'],MS=['Чехов','Петров','Смирнов','Кузнецов','Волков','Орлов','Морозов','Соколов','Лебедев','Ким','Новиков','Фёдоров'];
+const F1=['Алиса','Марина','Ольга','Анна','Екатерина','Дарья','Ирина','Софья','Полина','Елена','Наталья','Вера'],FS=['Петрова','Ким','Смирнова','Кузнецова','Волкова','Орлова','Морозова','Соколова','Лебедева','Новикова','Фёдорова','Чехова'];
+function author(){const f=Math.random()<.5,n=f?pick(F1)+' '+pick(FS):pick(M1)+' '+pick(MS);let h=0;for(const ch of n)h=(h*31+ch.charCodeAt(0))>>>0;return{a:n,c:'hsl('+(h%360)+',52%,46%)'}}
+function post(m,inc){
+  const S=City.S;S.chat=S.chat||[];
+  if(S.chat.slice(-14).some(x=>x.t===m.t))return;
+  S.chatN=(S.chatN||0)+1;const a=author();
+  S.chat.push({id:S.chatN,a:a.a,c:a.c,g:gmn(),t:m.t,tg:(m.tg||[]).filter(Boolean),x:m.x!==undefined?m.x:(inc?inc.x:undefined),y:m.y!==undefined?m.y:(inc?inc.y:undefined)});
+  while(S.chat.length>100)S.chat.shift();
+  dirtyChat=true;
+}
+setInterval(()=>{if(dirtyChat){dirtyChat=false;try{save()}catch(e){}}},5000);
+const plur=(n,a,b,c)=>{n=Math.abs(n)%100;const m=n%10;return n>10&&n<20?c:m===1?a:m>1&&m<5?b:c};
+const ago=m=>{m=Math.round(m);if(m>=60){const h=Math.floor(m/60);return h+' '+plur(h,'час','часа','часов')}return m+' '+plur(m,'минуту','минуты','минут')};
+const W=i=>i.kind==='air'?(i.dn?'в районе «'+i.dn+'»':i.rn?'рядом с улицей «'+i.rn+'»':'в городе'):(i.rn?'на улице «'+i.rn+'»':i.dn?'в районе «'+i.dn+'»':'на дороге');
+const NUM=r=>{const m=/^(\d+[A-Za-zА-Яа-я]?)/.exec(String((r&&r.n)||'').trim());return m?m[1]:''};
+function mWit(i){return pick([
+ {t:'Видела ДТП '+W(i)+', ужас!',tg:['ДТП','кажется_будет_пробка']},
+ {t:'Только что проезжал мимо ДТП '+W(i)+'. Все стоят, едем в объезд.',tg:['ДТП','объезд']},
+ {t:(i.rn?'На улице «'+i.rn+'»':'Рядом с моим домом')+' авария: аварийки, битое стекло. Осторожнее!',tg:['авария','осторожно']},
+ {t:'Увидел ДТП '+W(i)+' — сердце ушло в пятки.',tg:['ДТП','страшно']}])}
+function mPart(i){
+  const pub=i.veh.find(e=>e.t!=='car');
+  if(pub){const n=NUM(pub.R0);return{t:PUBN[pub.t]+(n?' №'+n:'')+' попал в ДТП '+W(i)+'. '+(i.inj?'Есть пострадавшие, пассажиры в шоке.':'Пассажиры напуганы, но все целы.'),tg:[pub.t==='bus'?'автобус':pub.t==='tram'?'трамвай':'троллейбус','ДТП',n||'транспорт']}}
+  if(i.sev>1)return pick([{t:'Попал в ДТП '+W(i)+'. Есть пострадавшие, вызвали скорую и полицию.',tg:['ДТП','скорая','помогите']},{t:'Нас подрезали, и мы въехали в другую машину '+W(i)+'. Руки трясутся...',tg:['ДТП','страшно']}]);
+  return pick([{t:'Лёгкое ДТП '+W(i)+': все целы, стоим и ждём полицию.',tg:['ДТП','полиция']},{t:'Поцарапали бампер '+W(i)+', ждём полицию на месте.',tg:['ДТП','полиция']}]);
+}
+const mJam=i=>({t:pick(['Из-за ДТП '+W(i)+' образовалась огромная пробка!','Встали намертво после ДТП '+W(i)+'. Когда это закончится?']),tg:['пробка','ДТП','когда_уже']});
+const mDone=i=>({t:'ДТП '+W(i)+' убрали, движение восстановили.',tg:['ДТП','пробка_рассасывается']});
+function lateMsg(inc,j,w){
+  const a=ago(w),road=inc.kind==='road',tag=road?'дтп':'авиакатастрофа';
+  if(j.t==='police'){
+    if(j.st==='none'&&j.lp===1)return{t:road?'В городе нет полиции?! После ДТП '+W(inc)+' никто так и не приехал.':'В городе нет полиции — на месте падения самолёта творится хаос.',tg:['полиция','безопасность',tag]};
+    return road?pick([{t:'Попал в ДТП, вызвали полицию '+a+' назад, и где?',tg:['Полиция','безопасность','дтп']},{t:'Полицию вызвали '+a+' назад, а на ДТП '+W(inc)+' до сих пор никого. Куда мы катимся?',tg:['полиция','дтп','где_вы']}])
+      :{t:'Место падения самолёта никто не оцепил уже '+a+'. Где полиция?',tg:['полиция','авиакатастрофа','безопасность']};
+  }
+  if(j.t==='amb')return road?{t:'У нас пострадавшие после ДТП '+W(inc)+', скорую ждём уже '+a+'. Вы вообще собираетесь ехать?!',tg:['скорая','помощь','дтп']}:{t:'Скорой на месте катастрофы всё нет — ждём уже '+a+'.',tg:['скорая','авиакатастрофа','помогите']};
+  return road?{t:'Горит машина '+W(inc)+' после ДТП, а пожарных нет уже '+a+'!',tg:['пожарные','дтп','горим']}:{t:'Самолёт горит уже '+a+', где пожарные?!',tg:['пожарные','авиакатастрофа','напомощь']};
+}
+function onArrive(inc,j,g){
+  const w=g-j.callG,road=inc.kind==='road',tag=road?'дтп':'авиакатастрофа';
+  if(j.t==='fire'&&road)inc.burn=false;
+  let m=null;
+  if(j.t==='police'){
+    if(w>=20)m={t:road?'Наконец-то приехала полиция '+W(inc)+', ждали '+ago(w)+'.':'Полиция оцепила место падения самолёта. Хоть какой-то порядок.',tg:['полиция',tag]};
+    else if(road&&w<8&&Math.random()<.45)m={t:'Полиция приехала быстро: оформили ДТП '+W(inc)+' за считанные минуты. Спасибо!',tg:['полиция','спасибо','дтп']};
+  }else if(j.t==='fire'&&(j.idx||0)===0&&(!road||Math.random()<.6))m={t:road?'Пожарные потушили машину '+W(inc)+'. Молодцы!':'Пожарные на месте, тушат самолёт. Держитесь, ребята!',tg:['пожарные',tag,'спасибо']};
+  else if(j.t==='amb'&&(j.idx||0)===0&&Math.random()<.5)m={t:'Скорая приехала и забирает пострадавших '+W(inc)+'. Дай бог всем здоровья.',tg:['скорая',tag,'помощь']};
+  if(m)post(m,inc);
+}
+
+/* ================= МЕСТНОСТЬ ================= */
+const tget=(i,j)=>{const s=City.S.terr&&City.S.terr[(i>>5)+','+(j>>5)];return s?s.charAt(((j&31)<<5)|(i&31)):' '};
+const isW=(i,j)=>{const c=tget(i,j);return c==='w'||c==='s'};
+function nearRoad(x,y){let best=null;City.S.roads.forEach(R=>{for(let i=1;i<R.pts.length;i++){const d=dseg([x,y],R.pts[i-1],R.pts[i]);if(!best||d<best.d)best={d,R}}});return best&&best.d<80?best.R:null}
+const distOf=(x,y)=>{const d=(City.S.dists||[]).find(d=>d.n&&d.pts&&inPoly([x,y],d.pts));return d?d.n:''};
+
+/* ================= ДОРОЖНЫЙ ГРАФ (для спецмашин) ================= */
+let GR=null;City.on('change',()=>{GR=null});
+const projP=(p,a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l:0;t=clamp(t,0,1);const q=[a[0]+dx*t,a[1]+dy*t];return{t,q,d:dst(p,q)}};
+function graph(){
+  if(GR&&GR.S===City.S)return GR;
+  const S=City.S,sg=[],links=[];
+  S.roads.forEach((R,ri)=>{for(let i=1;i<R.pts.length;i++){const a=R.pts[i-1],b=R.pts[i];sg.push({a,b,ri,sp:[[0,a],[1,b]],x0:Math.min(a[0],b[0])-1,x1:Math.max(a[0],b[0])+1,y0:Math.min(a[1],b[1])-1,y1:Math.max(a[1],b[1])+1})}});
+  for(let i=0;i<sg.length;i++){const s=sg[i];for(let j=i+1;j<sg.length;j++){const u=sg[j];
+    if(s.ri===u.ri||s.x1<u.x0||u.x1<s.x0||s.y1<u.y0||u.y1<s.y0)continue;
+    const r=[s.b[0]-s.a[0],s.b[1]-s.a[1]],q=[u.b[0]-u.a[0],u.b[1]-u.a[1]],den=r[0]*q[1]-r[1]*q[0];
+    if(Math.abs(den)<1e-9)continue;
+    const w=[u.a[0]-s.a[0],u.a[1]-s.a[1]],t=(w[0]*q[1]-w[1]*q[0])/den,v=(w[0]*r[1]-w[1]*r[0])/den,e=1e-6;
+    if(t<-e||t>1+e||v<-e||v>1+e)continue;
+    const tc=clamp(t,0,1),p=[s.a[0]+r[0]*tc,s.a[1]+r[1]*tc];s.sp.push([t,p]);u.sp.push([v,p]);}}
+  S.roads.forEach((R,ri)=>[R.pts[0],R.pts[R.pts.length-1]].forEach(e=>{
+    let best=null;sg.forEach(s=>{if(s.ri===ri)return;const r=projP(e,s.a,s.b);if(r.d<8&&(!best||r.d<best.r.d))best={s,r}});
+    if(best&&best.r.d>.05){best.s.sp.push([best.r.t,best.r.q]);links.push([e,best.r.q])}}));
+  const ix=new Map(),pts=[],adj=[];
+  const node=p=>{const k=Math.round(p[0]*10)+','+Math.round(p[1]*10);let i=ix.get(k);if(i===undefined){i=pts.length;ix.set(k,i);pts.push(p);adj.push([])}return i};
+  const link=(p,q)=>{const a=node(p),b=node(q);if(a===b)return;const w=dst(p,q);adj[a].push([b,w]);adj[b].push([a,w])};
+  sg.forEach(s=>{s.sp.sort((x,y)=>x[0]-y[0]);for(let i=1;i<s.sp.length;i++)link(s.sp[i-1][1],s.sp[i][1])});
+  links.forEach(l=>link(l[0],l[1]));
+  return GR={S,pts,adj};
+}
+function route(a,b){
+  const g=graph(),n=g.pts.length;if(!n)return[a,b];
+  const near=p=>{let bi=0,bd=1e18;g.pts.forEach((q,i)=>{const d=(q[0]-p[0])**2+(q[1]-p[1])**2;if(d<bd){bd=d;bi=i}});return bi};
+  const s=near(a),t=near(b),d=new Float64Array(n).fill(Infinity),pr=new Int32Array(n).fill(-1);d[s]=0;
+  const H=[[0,s]];
+  const push=(k,v)=>{H.push([k,v]);let i=H.length-1;while(i>0){const p=(i-1)>>1;if(H[p][0]<=H[i][0])break;[H[p],H[i]]=[H[i],H[p]];i=p}};
+  const pop=()=>{const r=H[0],l=H.pop();if(H.length){H[0]=l;let i=0;for(;;){let m=i;const x=2*i+1,y=x+1;if(x<H.length&&H[x][0]<H[m][0])m=x;if(y<H.length&&H[y][0]<H[m][0])m=y;if(m===i)break;[H[m],H[i]]=[H[i],H[m]];i=m}}return r};
+  while(H.length){const[c,u]=pop();if(c>d[u])continue;if(u===t)break;for(const[v,w]of g.adj[u])if(c+w<d[v]){d[v]=c+w;pr[v]=u;push(d[v],v)}}
+  if(d[t]===Infinity)return[a,b];
+  const out=[];for(let u=t;u>=0;u=pr[u])out.push(g.pts[u]);out.reverse();
+  return[a].concat(out,[b]);
+}
+const cumOf=p=>{const c=[0];for(let i=1;i<p.length;i++)c.push(c[i-1]+dst(p[i],p[i-1]));return c};
+function alongP(p,c,d){let i=1;while(i<c.length-1&&c[i]<d)i++;const a=p[i-1],b=p[i],l=(c[i]-c[i-1])||1,t=clamp((d-c[i-1])/l,0,1);return{x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t,an:Math.atan2(b[1]-a[1],b[0]-a[0])}}
+
+/* ================= ТРАНСПОРТ НА КАРТЕ ================= */
+function allVeh(){
+  const out=[];
+  (City.vis?City.vis():[]).forEach(q=>{
+    if(q.k==='car'){const c=q.ref;if(c&&c.R&&c.R.pts&&c.x!==undefined)out.push({t:'car',ref:c,x:c.x,y:c.y,an:c.an||0,r:q.r,mv:c.v>1.5,R:c.R})}
+    else if(q.k==='bus'){const st=City.busState&&City.busState(q.ref);if(st&&st.run&&!st.park)out.push({t:'bus',ref:q.ref,st,x:q.x,y:q.y,an:st.an||0,r:q.r,mv:st.v>1.5&&!(st.dw>0),R:q.R})}
+  });
+  rail.forEach(h=>{const st=h.st;if(st&&st.run&&!st.park)out.push({t:h.R.sys,ref:h.b,st,x:h.x,y:h.y,an:st.an||0,r:h.r,mv:st.v>1.5&&!(st.dw>0),R:h.R})});
+  return out.filter(v=>!INV.has(v.ref));
+}
+const airborne=()=>(City.vis?City.vis():[]).filter(q=>q.k==='air'&&q.ref&&q.ref.pl&&q.ref.R&&q.ref.ph==='fly'&&q.ref.alt>.3);
+function findPartner(p,pool){let best=null;pool.forEach(v=>{if(v.ref===p.ref)return;const d=dst([v.x,v.y],[p.x,p.y]);if(d<(p.r+v.r)*1.6+30&&(!best||d<best.d))best={d,v}});return best&&best.v}
+function jamCount(inc){let n=0;(City.vis?City.vis():[]).forEach(q=>{if(q.k==='car'&&q.ref&&!INV.has(q.ref)&&q.ref.v<1.5&&dst([q.x,q.y],[inc.x,inc.y])<130)n++});return n}
+
+/* ================= ДТП ================= */
+function mkEntry(v,sev){
+  const e={t:v.t,ref:v.ref,st:v.st||null,r:v.r,name:v.t==='car'?((v.ref.m&&v.ref.m.n)||'Автомобиль'):(v.ref.m||PUBN[v.t]),R0:v.t==='car'?null:((v.R&&v.R.R0)||v.R),lane:{x:v.x,y:v.y,an:v.an},pose:{x:v.x,y:v.y,an:v.an},wreck:false};
+  if(v.t==='car')e.f={R:v.ref.R,s:v.ref.s,dir:v.ref.dir,li:v.ref.li};
+  return e;
+}
+function startRoad(prim,part){
+  const S=City.S,g=gmn(),list=part?[prim,part]:[prim],hv=v=>v.t==='car'?0:1;
+  if(part&&hv(part)>hv(prim))list.reverse();
+  const A=list[0],B=list[1],wm=Math.min(1.6,WXM[wxn()]||1),hasPub=list.some(v=>v.t!=='car'),multi=list.length>1;
+  const p3=.07*wm+(hasPub?.05:0)+(multi?.03:0),p2_=.28*wm+(hasPub?.1:0),rr=Math.random();
+  const sev=rr<p3?3:rr<p3+p2_?2:1;
+  let inj=sev===1?(Math.random()<.35?1:0):sev===2?ri(1,3):ri(2,5);
+  if(hasPub&&sev>1)inj+=ri(1,5);
+  const dead=sev===3?ri(0,hasPub?3:2):0;
+  const road=A.t==='car'?A.ref.R:nearRoad(A.x,A.y);
+  const inc={id:uid++,kind:'road',phase:'on',g0:g,x:A.x,y:A.y,sev,inj,dead,burn:sev>1&&Math.random()<(sev===3?.55:.18),veh:[],jobs:[],q:[],seed:Math.random()*10,
+    rn:(road&&road.n)||'',dn:distOf(A.x,A.y)};
+  const eA=mkEntry(A,sev),eB=B?mkEntry(B,sev):null;
+  if(eA.t==='car')eA.pose.an=A.an+rnd(-.3,.3)*sev;else if(eA.t==='bus')eA.st.an+=rnd(-.25,.25)*sev;
+  if(eB&&eB.t==='car'){const dx=B.x-A.x,dy=B.y-A.y,d=Math.hypot(dx,dy)||1,tg=Math.min(d,(A.r+B.r)*.8);eB.pose={x:A.x+dx/d*tg,y:A.y+dy/d*tg,an:B.an+rnd(-.6,.6)}}
+  else if(eB&&eB.t==='bus')eB.st.an+=rnd(-.25,.25)*sev;
+  inc.veh=eB?[eA,eB]:[eA];
+  if(sev===3)inc.veh.forEach(e=>{e.wreck=Math.random()<(e.t==='car'?.8:.5)});
+  inc.veh.forEach(e=>INV.add(e.ref));
+  inc.deb=Array.from({length:8+sev*4},()=>[rnd(-26,26),rnd(-26,26),rnd(1.5,5),rnd(1,3),rnd(0,6.28),pick(['#2a2a2a','#555','#8a2a2a','#bfe3f2','#888'])]);
+  const J=(t,idx)=>({t,idx:idx||0,st:'wait',callG:g+rnd(CFG.CALL[0],CFG.CALL[1]),done:false,unit:null,lp:0});
+  inc.jobs.push(J('police'));if(inj>0||dead)inc.jobs.push(J('amb'));if(inc.burn)inc.jobs.push(J('fire'));
+  inc.q.push({g:g+rnd(.2,1),f:()=>mWit(inc)},{g:g+rnd(.6,2.5),f:()=>mPart(inc)},{g:g+rnd(3,7),f:()=>jamCount(inc)>=3?mJam(inc):null});
+  if(Math.random()<.5)inc.q.push({g:g+rnd(2,6),f:()=>mWit(inc)});
+  if(inc.burn)inc.q.push({g:g+rnd(.5,2),f:()=>({t:'После ДТП '+W(inc)+' загорелась машина! Вызывайте пожарных!',tg:['ДТП','пожар','напомощь']})});
+  INCS.push(inc);
+  const cs=cstat();cs.n++;cs.inj+=inj;cs.dead+=dead;
+  say('🚨 ДТП'+(inc.rn?' на «'+inc.rn+'»':'')+(sev>2?' — тяжёлое!':''));
+  City.changed();
+  return inc;
+}
+function forceRoad(){
+  const vs=allVeh();if(!vs.length){say('Нет транспорта на дорогах (включите «Машины»/«Автобусы»)');return}
+  const mv=vs.filter(v=>v.mv),p=pick(mv.length?mv:vs);
+  startRoad(p,Math.random()<.75?findPartner(p,vs):null);
+}
+function enforce(){
+  const S=City.S;
+  INCS.forEach(inc=>{
+    if(inc.kind!=='road')return;
+    inc.veh=inc.veh.filter(e=>{
+      const ok=e.t==='car'?S.roads.includes(e.f.R):e.t==='bus'?S.routes.some(R=>(R.buses||[]).includes(e.ref)):(S.vroutes||[]).some(R=>(R.veh||[]).includes(e.ref));
+      if(!ok){INV.delete(e.ref);HOLD.delete(e.ref)}return ok});
+    inc.veh.forEach(e=>{
+      if(e.t==='car'){const c=e.ref;c.R=e.f.R;c.s=e.f.s;c.dir=e.f.dir;c.li=e.f.li;c.v=0;c.x=e.pose.x;c.y=e.pose.y;c.an=e.pose.an;c.ox=0;c.oy=0}
+      else if(e.t==='bus'){if(!(e.st.dw>0))e.st.dw=8;e.st.v=0;HOLD.add(e.ref)}
+      else{e.st.dw=1e4;e.st.v=0}
+    });
+  });
+}
+function writeOff(e){
+  const S=City.S;
+  const rm=(arr,key)=>(arr||[]).forEach(R=>{const L=R[key]||[],i=L.indexOf(e.ref);if(i>=0){L.splice(i,1);const d=(S.depots||[]).find(x=>x.id===R.d);if(d&&d.fleet&&d.fleet[e.ref.m])d.fleet[e.ref.m]=Math.max(0,d.fleet[e.ref.m]-1)}});
+  rm(S.routes,'buses');rm(S.vroutes,'veh');
+}
+function finishRoad(inc,manual){
+  const S=City.S;let ghost=false,lost=0,cost=0;
+  inc.veh.forEach(e=>{
+    INV.delete(e.ref);
+    if(e.t==='car'){if(e.wreck){e.ref.R=GHOST;ghost=true}else{e.ref.ox=e.pose.x-e.lane.x;e.ref.oy=e.pose.y-e.lane.y;e.ref.cool=0}}
+    else{HOLD.delete(e.ref);e.st.dw=.3;if(e.wreck){lost++;writeOff(e)}else if(!manual)cost+=CFG.REPAIR[inc.sev-1]||0}
+  });
+  inc.veh=[];
+  if(cost&&typeof S.money==='number'){S.money=Math.max(0,S.money-cost);say('Ремонт транспорта после ДТП: −'+n0(cost))}
+  if(lost)say('Транспорт списан после ДТП: '+lost+' ед.');
+  if(ghost||lost||cost)City.changed();
+}
+
+/* ================= СЛУЖБЫ ================= */
+const OFF={police:[16,-12],amb:[-16,12],fire:[2,24]};
+function stationFor(t,inc){
+  const L=(City.S.svc||[]).filter(s=>s.t===t);if(!L.length)return'none';
+  L.sort((a,b)=>dst([a.x,a.y],[inc.x,inc.y])-dst([b.x,b.y],[inc.x,inc.y]));
+  return L.find(s=>(busy.get(s)||0)<CFG.STN_CAP)||'busy';
+}
+function launch(inc,j,stn){
+  busy.set(stn,(busy.get(stn)||0)+1);
+  const o=OFF[j.t],k=j.idx||0,tg=[inc.x+o[0]+k*12,inc.y+o[1]+k*8],pts=route([stn.x,stn.y],tg),cum=cumOf(pts);
+  const un={inc,j,t:j.t,stn,pts,cum,L:cum[cum.length-1],d:0,phase:'go',x:stn.x,y:stn.y,an:0};
+  j.unit=un;j.st='go';UN.push(un);
+}
+function unitStep(un,dt,g){
+  const spd=CFG.SPEED[un.t]/3.6*4/mpu();
+  if(un.phase==='go'){
+    un.d=Math.min(un.L,un.d+spd*dt);const q=alongP(un.pts,un.cum,un.d);un.x=q.x;un.y=q.y;un.an=q.an;
+    if(un.d>=un.L){const j=un.j,r=(WT[un.inc.kind]||WT.road)[un.t];un.phase='work';j.st='work';j.wEnd=g+rnd(r[0],r[1]);onArrive(un.inc,j,g)}
+  }else if(un.phase==='back'){
+    un.d=Math.max(0,un.d-spd*dt);const q=alongP(un.pts,un.cum,un.d);un.x=q.x;un.y=q.y;un.an=q.an+Math.PI;
+    if(un.d<=0){busy.set(un.stn,Math.max(0,(busy.get(un.stn)||1)-1));un.dead=true}
+  }
+}
+function jobStep(inc,j,g){
+  if(j.st==='wait'||j.st==='none'){
+    if(g<j.callG)return;
+    const s=stationFor(j.t,inc);
+    if(s==='none'){j.st='none';return}
+    if(s==='busy'){j.st='wait';return}
+    launch(inc,j,s);
+  }else if(j.st==='work'&&g>=j.wEnd){j.st='done';j.done=true;if(j.unit)j.unit.phase='back'}
+}
+function late(inc,g){
+  inc.jobs.forEach(j=>{
+    if(j.st==='work'||j.st==='done')return;
+    const w=g-j.callG,th=LATE[j.t];
+    if(j.lp<th.length&&w>=th[j.lp]){j.lp++;const m=lateMsg(inc,j,w);if(m)post(m,inc)}
+  });
+}
+
+/* ================= АВИАКАТАСТРОФА ================= */
+function startAir(q){
+  const f=q.ref,R=f.R,pl=f.pl;if(!R||!pl)return;
+  const S=City.S,g=gmn(),sp=PL[pl.m]||PL['Boeing 737'];
+  const inc={id:uid++,kind:'air',phase:'fall',g0:g,x:f.x,y:f.y,m:pl.m,al:pl.al,rt:R.n,seats:sp.seats,L:Math.max(sp.l/mpu(),14),sp:Math.max(sp.sp/mpu(),14),jobs:[],q:[],seed:Math.random()*10,
+    rn:'',dn:distOf(f.x,f.y),burn:false,dead:0,inj:0,hit:0,
+    fall:{t0:now(),dur:rnd(3.6,5.4),x:f.x,y:f.y,dir:f.an||0,an:f.an||0,spin:Math.random()<.5?1:-1,v0:Math.max(f.v||80,60),tr:[],tt:0}};
+  const rd=nearRoad(f.x,f.y);inc.rn=(rd&&rd.n)||'';
+  const i=(R.planes||[]).indexOf(pl);if(i>=0)R.planes.splice(i,1);
+  f.x=f.y=-1e7;
+  inc.q.push({g,f:()=>({t:'Вы это видели?! Это была не птица…',tg:['авиакатастрофа','напомощь','ужас']})},
+    {g:g+.1,f:()=>({t:pick(['Самолёт над городом резко пошёл вниз! Он падает!','Слышали рёв? Самолёт падает прямо над нами!']),tg:['авиакатастрофа','страшно']})});
+  INCS.push(inc);
+  say('✈ Авиакатастрофа! Рейс «'+(R.n||'')+'»');
+  City.changed();
+}
+function forceAir(){
+  let ps=airborne();
+  if(!ps.length)ps=(City.vis?City.vis():[]).filter(q=>q.k==='air'&&q.ref&&q.ref.pl&&q.ref.R&&q.ref.ph!=='park');
+  if(!ps.length){say('Нет самолётов в воздухе (нужен маршрут самолётов)');return}
+  startAir(pick(ps));
+}
+function fallStep(inc,dt,n){
+  const p=inc.fall,t=clamp((n-p.t0)/p.dur,0,1),v=p.v0*(1-.55*t);
+  p.dir+=p.spin*dt*.35*(.3+1.5*t);
+  p.x+=Math.cos(p.dir)*v*dt;p.y+=Math.sin(p.dir)*v*dt;p.an=p.dir+p.spin*t*t*5;
+  p.tt-=dt;if(p.tt<=0){p.tt=.05;p.tr.push([p.x,p.y]);if(p.tr.length>40)p.tr.shift()}
+  inc.x=p.x;inc.y=p.y;
+  if(t>=1)impact(inc);
+}
+function damage(x,y,r,p){
+  const S=City.S;let pop=0,hs=0;
+  S.blds=S.blds.filter(b=>{
+    const c=b.pts?[b.pts.reduce((s,q)=>s+q[0],0)/b.pts.length,b.pts.reduce((s,q)=>s+q[1],0)/b.pts.length]:[b.x+b.w/2,b.y+b.h/2];
+    if(dst(c,[x,y])<r&&Math.random()<p){
+      if(b.t==='house'){hs++;pop+=(b.pop===undefined||b.pop==='')?Math.max(1,Math.round(b.w*b.h*mpu()*mpu()/25)):Math.max(0,+b.pop||0)}
+      if(sel&&sel.o===b)sel=null;return false}
+    return true});
+  const Z=S.zones;
+  if(Z)for(let j=Math.floor((y-r)/TC);j<=Math.floor((y+r)/TC);j++)for(let i=Math.floor((x-r)/TC);i<=Math.floor((x+r)/TC);i++){
+    if(Math.hypot((i+.5)*TC-x,(j+.5)*TC-y)>r||Math.random()>p)continue;
+    const key=(i>>5)+','+(j>>5),z=Z[key],q=((j&31)<<5)|(i&31);
+    if(z&&z.t[q]!==' '){if(z.t[q]==='r')pop+=3;z.t=z.t.slice(0,q)+' '+z.t.slice(q+1);z.d=z.d.slice(0,q)+' '+z.d.slice(q+1);if(/^ +$/.test(z.t))delete Z[key]}
+  }
+  if(S.trees)S.trees=S.trees.filter(t=>!(dst([t.x,t.y],[x,y])<r&&Math.random()<p));
+  return{pop,hs};
+}
+function impact(inc){
+  const S=City.S,g=gmn(),x=inc.x,y=inc.y;
+  inc.phase='burn';inc.boomT=now();inc.burn=true;
+  inc.water=isW(Math.floor(x/TC),Math.floor(y/TC));
+  const RD=clamp(inc.L*1.6,45,150);let hit={pop:0,hs:0},ground=0,cars=0;
+  if(!inc.water){
+    hit=damage(x,y,RD,.85);
+    (S.craters=S.craters||[]).push({x,y,r:Math.max(10,inc.L*.28)});
+    (City.vis?City.vis():[]).forEach(q=>{if(q.k==='car'&&q.ref&&!INV.has(q.ref)&&dst([q.x,q.y],[x,y])<RD*.55){q.ref.R=GHOST;cars++}});
+    ground=Math.round(hit.pop*rnd(.2,.6))+cars*ri(1,3);
+  }
+  const aboard=Math.round(inc.seats*rnd(.55,.95));
+  inc.dead=Math.round(aboard*(inc.water?rnd(.5,1):rnd(.75,1)))+ground;inc.inj=Math.round(aboard*rnd(.02,.15))+Math.round(hit.pop*rnd(.1,.3));inc.aboard=aboard;inc.hit=hit.hs;
+  inc.deb=[];const ca=Math.cos(inc.fall.dir),sa=Math.sin(inc.fall.dir);
+  for(let i=0;i<22;i++){const d=rnd(-inc.L*.2,inc.L*1.1),pp=rnd(-inc.L*.18,inc.L*.18);inc.deb.push([ca*d-sa*pp,sa*d+ca*pp,rnd(2,inc.L*.14),rnd(1.5,5),rnd(0,6.28),pick(['#2a2a2a','#555','#8a8f94','#dfe5e8','#7a2a20'])])}
+  const cs=cstat();cs.air++;cs.dead+=inc.dead;cs.inj+=inc.inj;
+  const J=(t,idx)=>({t,idx,st:'wait',callG:g+rnd(.3,1.2),done:false,unit:null,lp:0});
+  if(!inc.water){inc.jobs.push(J('police',0),J('amb',0),J('amb',1),J('fire',0),J('fire',1))}else inc.clearG=g+rnd(40,70);
+  const w=inc.water;
+  inc.q.push({g:g+rnd(.15,.5),f:()=>({t:w?'Самолёт упал в воду недалеко от берега! Все смотрят в сторону моря.':'Самолёт упал '+W(inc)+'! Столб дыма виден отовсюду.',tg:w?['авиакатастрофа','спасатели']:['авиакатастрофа','дым','напомощь']})},
+    {g:g+rnd(.3,1),f:()=>({t:'Дрожат окна. Неужели это упал самолёт? Страшно...',tg:['авиакатастрофа','страшно']})},
+    {g:g+rnd(1,3),f:()=>({t:'Рейс «'+(inc.rt||'')+'» не долетел... Страшно за пассажиров.',tg:['авиакатастрофа','рейс']})});
+  if(inc.hit>0)inc.q.push({g:g+rnd(.5,1.5),f:()=>({t:'Самолёт упал на дома! Соседний квартал разрушен, нужна помощь!',tg:['авиакатастрофа','помогите']})});
+  if(inc.dead>0)inc.q.push({g:g+rnd(4,10),f:()=>({t:'По слухам, погибло около '+n0(inc.dead)+' человек. Скорбим.',tg:['скорбим','авиакатастрофа']})});
+  say('💥 Самолёт упал'+(inc.dn?' в районе «'+inc.dn+'»':'')+'. Погибших: '+n0(inc.dead));
+  City.changed();
+}
+
+/* ================= ЗАВЕРШЕНИЕ И ЦИКЛ ================= */
+function finish(inc,manual){
+  UN.forEach(u=>{if(u.inc===inc&&u.phase!=='back'){u.phase='back';u.j.done=true}});
+  if(inc.kind==='road')finishRoad(inc,manual);
+  const i=INCS.indexOf(inc);if(i>=0)INCS.splice(i,1);
+  if(!manual&&inc.kind==='road'&&Math.random()<.5)post(mDone(inc),inc);
+}
+function incsTick(dt,g){
+  const n=now();
+  for(let k=INCS.length-1;k>=0;k--){
+    const inc=INCS[k];
+    for(let q=inc.q.length-1;q>=0;q--){const it=inc.q[q];if(g>=it.g){inc.q.splice(q,1);let m=null;try{m=it.f()}catch(e){}if(m)post(m,inc)}}
+    if(inc.phase==='fall'){fallStep(inc,dt,n);continue}
+    if(inc.kind==='road'&&!inc.veh.length){finish(inc,true);continue}
+    inc.jobs.forEach(j=>jobStep(inc,j,g));late(inc,g);
+    const fj=inc.jobs.filter(j=>j.t==='fire');if(fj.length&&fj.every(j=>j.done))inc.burn=false;
+    const pending=inc.jobs.some(j=>!j.done&&j.st!=='none');
+    if(!pending){
+      if(inc.clearG===undefined)inc.clearG=g+(inc.jobs.some(j=>j.st==='none')?rnd(120,240):inc.kind==='air'?rnd(8,20):rnd(2,6));
+      if(g>=inc.clearG)finish(inc,false);
+    }
+    if(g-inc.g0>600)finish(inc,false);
+  }
+  for(let k=UN.length-1;k>=0;k--){unitStep(UN[k],dt,g);if(UN[k].dead)UN.splice(k,1)}
+}
+let rAcc=0,rLast=now();
+function risk(dg){
+  rAcc+=dg;const n=now();if(n-rLast<.6)return;rLast=n;const a=rAcc;rAcc=0;
+  if(!cfg.on||!a)return;
+  const m=cfg.f*(night()?1.3:1)*(rush()?1.2:1);
+  if(INCS.filter(i=>i.kind==='road').length<CFG.MAX_ROAD){
+    const vs=allVeh(),mv=vs.filter(v=>v.mv);
+    if(mv.length&&Math.random()<a*mv.length/CFG.BASE_VEH*m*(WXM[wxn()]||1)){const p=pick(mv);startRoad(p,Math.random()<.75?findPartner(p,vs):null)}
+  }
+  if(!INCS.some(i=>i.kind==='air')){
+    const ps=airborne();
+    if(ps.length&&Math.random()<a*ps.length/CFG.BASE_AIR*m*(WXA[wxn()]||1))startAir(pick(ps));
+  }
+}
+let last=now(),lastG=null;
+(function loop(){
+  const n=now(),dt=Math.min(.1,Math.max(0,n-last));last=n;
+  try{
+    if(Sref!==City.S){Sref=City.S;INCS.length=0;UN.length=0;INV.clear();HOLD.clear();busy.clear()}
+    const g=gmn();if(lastG===null||Math.abs(g-lastG)>30)lastG=g;
+    const dg=Math.max(0,g-lastG);lastG=g;
+    enforce();incsTick(dt,g);risk(dg);
+    if(INCS.length||UN.length)City.redraw();
+  }catch(e){console.error(e)}
+  requestAnimationFrame(loop);
+})();
+
+/* ================= ОТРИСОВКА ================= */
+function label(c,t,x,y,sc,P){c.font='700 '+(11*sc)+'px '+F;c.textAlign='center';c.textBaseline='middle';c.lineWidth=3.5*sc;c.lineJoin='round';c.strokeStyle=P.bg;c.strokeText(t,x,y);c.fillStyle=P.ink;c.fillText(t,x,y)}
+function flame(c,x,y,r,t,s){for(let j=0;j<5;j++){const a=t*9+j*2.1+s,rr=r*(.55+.45*Math.sin(a)),ox=Math.cos(j*1.9+s)*r*.8,oy=Math.sin(j*2.7+s)*r*.8-Math.abs(Math.sin(a))*r*.5;
+  c.beginPath();c.arc(x+ox,y+oy,rr*.7,0,7);c.fillStyle=j%2?'rgba(255,170,40,.85)':'rgba(255,90,20,.8)';c.fill();
+  c.beginPath();c.arc(x+ox,y+oy,rr*.35,0,7);c.fillStyle='rgba(255,235,150,.9)';c.fill()}}
+function smoke(c,x,y,t,n,sz,seed){for(let j=0;j<n;j++){const p=((t*.3+j/n+seed)%1);c.beginPath();c.arc(x+Math.sin(t*.8+j*2+seed)*sz*.3*p+p*sz*.3,y-p*sz*2.2,sz*(.25+p*.7),0,7);c.fillStyle='rgba(60,62,68,'+((1-p)*.42).toFixed(3)+')';c.fill()}}
+function planeShape(c,L,sp,col){
+  const Wd=L*.095,H=sp/2;c.lineJoin='round';c.lineWidth=.6;c.strokeStyle='#0007';
+  const pg=(pts,f)=>{c.beginPath();pts.forEach((p,i)=>i?c.lineTo(p[0],p[1]):c.moveTo(p[0],p[1]));c.closePath();c.fillStyle=f;c.fill();c.stroke()};
+  [1,-1].forEach(s=>{pg([[.1*L,s*Wd*.4],[-.09*L,s*H],[-.16*L,s*H],[-.1*L,s*Wd*.4]],col==='#000'?col:'#dfe5e8');pg([[-.4*L,s*Wd*.3],[-.46*L,s*L*.16],[-.49*L,s*L*.16],[-.47*L,s*Wd*.3]],col==='#000'?col:'#dfe5e8')});
+  c.beginPath();c.moveTo(.5*L,0);c.bezierCurveTo(.5*L,Wd*.35,.44*L,Wd/2,.36*L,Wd/2);c.lineTo(-.3*L,Wd/2);c.lineTo(-.5*L,Wd*.12);c.lineTo(-.5*L,-Wd*.12);c.lineTo(-.3*L,-Wd/2);c.lineTo(.36*L,-Wd/2);c.bezierCurveTo(.44*L,-Wd/2,.5*L,-Wd*.35,.5*L,0);c.closePath();c.fillStyle=col;c.fill();c.stroke();
+}
+function statusOf(inc){
+  const T={police:'полиция',amb:'скорая',fire:'пожарные'},base=inc.kind==='air'?'Авиакатастрофа':'ДТП';
+  if(inc.phase==='fall')return base;
+  const w=[...new Set(inc.jobs.filter(j=>!j.done&&j.st!=='work'&&j.st!=='none').map(j=>T[j.t]))];
+  if(w.length)return base+' · ждём: '+w.join(', ');
+  if(inc.jobs.some(j=>j.st==='work'))return base+' · работают службы';
+  if(inc.jobs.some(j=>j.st==='none'))return base+' · служб нет в городе';
+  return base+(inc.kind==='air'?' · последствия':' · уборка');
+}
+const ep=e=>e.t==='car'?e.pose:{x:e.st.x,y:e.st.y,an:e.st.an||0};
+function marker(c,inc,k,t,P,ic){
+  const sc=Math.max(1,.55/k);
+  c.save();c.translate(inc.x,inc.y-30*sc);c.scale(sc,sc);
+  const pr=(t*1.4)%1;c.beginPath();c.arc(0,0,12+pr*10,0,7);c.strokeStyle='rgba(215,38,61,'+(.5*(1-pr)).toFixed(2)+')';c.lineWidth=2;c.stroke();
+  c.beginPath();c.arc(0,0,12,0,7);c.fillStyle=(inc.sev>2||inc.kind==='air')?'#8e1b2b':'#d7263d';c.fill();c.lineWidth=2.5;c.strokeStyle='#fff';c.stroke();
+  c.fillStyle='#fff';c.font='800 14px '+F;c.textAlign='center';c.textBaseline='middle';c.fillText(ic,0,1);c.restore();
+  if(k>.4)label(c,statusOf(inc),inc.x,inc.y-50*sc,sc,P);
+}
+function drawRoad(c,inc,k,t,P){
+  inc.deb.forEach(d=>{c.save();c.translate(inc.x+d[0],inc.y+d[1]);c.rotate(d[4]);c.fillStyle=d[5];c.fillRect(-d[2]/2,-d[3]/2,d[2],d[3]);c.restore()});
+  const bl=Math.floor(t*2.6)%2;
+  inc.veh.forEach(e=>{
+    const p=ep(e);
+    if(e.t==='car'||e.t==='bus'){
+      const L=e.r*2,Wd=e.t==='car'?L*.4:2.6*bu();
+      c.strokeStyle='rgba(15,15,15,.3)';c.lineWidth=1.3;c.beginPath();c.moveTo(p.x-Math.cos(p.an)*L*1.5,p.y-Math.sin(p.an)*L*1.5);c.lineTo(p.x,p.y);c.stroke();
+      c.save();c.translate(p.x,p.y);c.rotate(p.an);
+      if(e.wreck){c.fillStyle='rgba(20,15,10,.55)';rrc(c,-L/2,-Wd/2,L,Wd,Wd*.25);c.fill()}
+      if(bl){c.fillStyle='#ffb21a';[[1,1],[1,-1],[-1,1],[-1,-1]].forEach(q=>{c.beginPath();c.arc(q[0]*L*.48,q[1]*Wd*.5,Math.max(.9,Wd*.08),0,7);c.fill()})}
+      c.restore();
+    }else if(bl){c.beginPath();c.arc(p.x,p.y,5,0,7);c.fillStyle='#ffb21a';c.fill()}
+  });
+  if(inc.sev>1||inc.burn)smoke(c,inc.x,inc.y,t,inc.burn?5:3,inc.burn?22:14,inc.seed);
+  if(inc.burn)flame(c,inc.x,inc.y,9,t,inc.seed);
+  marker(c,inc,k,t,P,'!');
+}
+function drawAir(c,inc,k,t,P){
+  if(inc.phase==='fall'){
+    const p=inc.fall,tt=clamp((now()-p.t0)/p.dur,0,1),h=1-tt;
+    for(let i=0;i<p.tr.length;i++){const q=p.tr[i],a=i/p.tr.length;c.beginPath();c.arc(q[0],q[1],3+a*7,0,7);c.fillStyle=a>.75?'rgba(255,140,30,'+(a*.5).toFixed(2)+')':'rgba(70,70,75,'+(a*.5).toFixed(2)+')';c.fill()}
+    c.save();c.translate(p.x+h*34,p.y+h*48);c.rotate(p.an);c.globalAlpha=.25;planeShape(c,inc.L,inc.sp,'#000');c.restore();
+    c.save();c.translate(p.x,p.y);c.rotate(p.an);c.scale(1+h*.25,1+h*.25);planeShape(c,inc.L,inc.sp,'#f4f6f7');
+    flame(c,inc.L*.02,inc.sp*.17,inc.L*.1,t,1);flame(c,inc.L*.02,-inc.sp*.17,inc.L*.1,t,3);flame(c,-inc.L*.4,0,inc.L*.08,t,5);c.restore();
+    return;
+  }
+  const bt=now()-inc.boomT;
+  if(inc.water){for(let j=0;j<3;j++){const p=((bt*.5+j/3)%1);c.beginPath();c.arc(inc.x,inc.y,p*inc.L*1.3+4,0,7);c.lineWidth=3;c.strokeStyle='rgba(255,255,255,'+(.6*(1-p)).toFixed(2)+')';c.stroke()}}
+  else inc.deb.forEach(d=>{c.save();c.translate(inc.x+d[0],inc.y+d[1]);c.rotate(d[4]);c.fillStyle=d[5];c.fillRect(-d[2]/2,-d[3]/2,d[2],d[3]);c.restore()});
+  if(bt<1.6){const a=bt/1.6;c.globalAlpha=1-a;c.beginPath();c.arc(inc.x,inc.y,inc.L*(.3+a*1.1),0,7);c.fillStyle='#ff8c1a';c.fill();c.beginPath();c.arc(inc.x,inc.y,inc.L*(.15+a*.5),0,7);c.fillStyle='#ffe08a';c.fill();
+    c.beginPath();c.arc(inc.x,inc.y,inc.L*2.2*a+4,0,7);c.lineWidth=5;c.strokeStyle='rgba(255,255,255,'+(.7*(1-a)).toFixed(2)+')';c.stroke();c.globalAlpha=1}
+  smoke(c,inc.x,inc.y,t,inc.burn?7:3,inc.burn?inc.L*.5:inc.L*.3,inc.seed);
+  if(inc.burn&&!inc.water)for(let j=0;j<4;j++)flame(c,inc.x+inc.deb[j*3][0]*.6,inc.y+inc.deb[j*3][1]*.6,inc.L*.14,t,j*1.7);
+  marker(c,inc,k,t,P,'✈');
+}
+function drawUnit(c,un,k,t){
+  const b=bu(),L=(un.t==='fire'?9:un.t==='amb'?6:5.2)*b,Wd=(un.t==='fire'?2.6:2.1)*b,ph=Math.floor(t*6)%2;
+  c.save();c.translate(un.x,un.y);c.rotate(un.an);
+  c.lineWidth=.8;c.strokeStyle='#000a';rrc(c,-L/2,-Wd/2,L,Wd,Wd*.2);c.fillStyle=un.t==='fire'?'#d7263d':'#f4f6f8';c.fill();c.stroke();
+  c.fillStyle=un.t==='police'?'#2a6bff':un.t==='amb'?'#d7263d':'#fff';c.fillRect(-L*.45,-Wd*.12,L*.9,Wd*.24);
+  c.fillStyle='#bfe3f2';c.fillRect(L*.2,-Wd*.38,L*.12,Wd*.76);
+  c.fillStyle=ph?'#ff2a2a':'#2a6bff';c.fillRect(L*.02,-Wd*.4,L*.12,Wd*.38);c.fillStyle=ph?'#2a6bff':'#ff2a2a';c.fillRect(L*.02,Wd*.02,L*.12,Wd*.38);
+  c.restore();
+  c.globalAlpha=.22;c.beginPath();c.arc(un.x,un.y,L*.9,0,7);c.fillStyle=ph?'#ff2a2a':'#2a6bff';c.fill();c.globalAlpha=1;
+  if(k>.5){const sc=Math.max(1,.55/k);c.font=(12*sc)+'px '+F;c.textAlign='center';c.textBaseline='middle';c.fillText(un.t==='fire'?'🚒':un.t==='amb'?'🚑':'🚓',un.x,un.y-14*sc)}
+}
+City.layers.over.push((c,P)=>{
+  const k=City.view.k,t=now();
+  INCS.forEach(inc=>{if(inc.kind==='road')drawRoad(c,inc,k,t,P);else drawAir(c,inc,k,t,P)});
+  UN.forEach(un=>drawUnit(c,un,k,t));
+});
+
+/* ================= ОКНО ПРОИСШЕСТВИЯ ================= */
+const JN={police:'Полиция',amb:'Скорая',fire:'Пожарные'},JS={wait:'ждёт свободной машины',go:'в пути',work:'на месте',done:'закончила работу',none:'такой службы в городе нет'};
+function showInc(inc){
+  const g=gmn(),air=inc.kind==='air';
+  let h='<b>'+(air?'Авиакатастрофа':'ДТП')+'</b><div style="color:var(--mut)">'+E(W(inc))+' · '+hm(inc.g0)+'</div>';
+  if(air)h+='<div style="font-size:13px;margin-top:6px">'+E(inc.m)+(inc.al&&inc.al!=='Без ливреи'?' ('+E(inc.al)+')':'')+'<br>Рейс: '+E(inc.rt||'—')+(inc.phase==='burn'?'<br>Погибших: <b>'+n0(inc.dead)+'</b>, пострадавших: <b>'+n0(inc.inj)+'</b>'+(inc.hit?'<br>Разрушено жилых домов: '+inc.hit:''):'<br>Самолёт падает…')+'</div>';
+  else h+='<div style="font-size:13px;margin-top:6px">'+['','Лёгкое','С пострадавшими','Тяжёлое'][inc.sev]+'<br>'+inc.veh.map(e=>E(e.name)).join('<br>')+'<br>Пострадавших: <b>'+inc.inj+'</b>, погибших: <b>'+inc.dead+'</b></div>';
+  h+=inc.jobs.map(j=>'<div style="font-size:12px;color:var(--mut)">'+JN[j.t]+(j.idx?' №'+(j.idx+1):'')+': '+JS[j.st]+(j.st==='wait'||j.st==='go'||j.st==='none'?' ('+ago(Math.max(0,g-j.callG))+' с вызова)':'')+'</div>').join('');
+  h+='<div class="row" style="margin-top:8px"><button id="cr-cl" class="b" data-id="'+inc.id+'">Расчистить</button><button id="cr-x" class="b">Закрыть</button></div>';
+  $('#pop').innerHTML=h;$('#pop').hidden=false;
+}
+$('#pop').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  if(b.id==='cr-x')$('#pop').hidden=true;
+  else if(b.id==='cr-cl'){const inc=INCS.find(i=>i.id===+b.dataset.id);if(inc){if(inc.phase==='fall')return;inc.burn=false;finish(inc,true)}$('#pop').hidden=true}
+});
+let dn=null;
+cv.addEventListener('pointerdown',e=>{dn=[e.clientX,e.clientY]});
+cv.addEventListener('pointerup',e=>{
+  if(!dn||City.tool!=='select'||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>5)return;
+  const V0=City.view,x=(e.offsetX-V0.x)/V0.k,y=(e.offsetY-V0.y)/V0.k;let best=null;
+  INCS.forEach(inc=>{const d=Math.hypot(inc.x-x,inc.y-y),r=Math.max(inc.kind==='air'?inc.L*.6:24,16/V0.k);if(d<r&&(!best||d<best.d))best={d,inc}});
+  if(!best)return;sel=null;City.updateUI();showInc(best.inc);
+});
+
+/* ================= ПАНЕЛЬ СЛЕВА ================= */
+{
+  const sec=document.createElement('details');sec.className='sec';sec.open=false;
+  sec.innerHTML='<summary>ДТП и катастрофы</summary><div class="sb"><div class="chips" id="cr-f"></div><div class="chips" style="margin-top:6px"><button class="chip" id="cr-on"></button></div><div id="cr-st" class="mu" style="margin-top:8px"></div><div class="chips" style="margin-top:8px"><button class="chip" id="cr-r">Случайное ДТП</button><button class="chip" id="cr-a">Авиакатастрофа</button><button class="chip" id="cr-c">Убрать всё</button></div></div>';
+  ($('#info')||$('#side')).appendChild(sec);
+  const FQ=[['Редко',.4],['Обычно',1],['Часто',3]];
+  const ui=()=>{
+    $('#cr-f').innerHTML=FQ.map(f=>'<button class="chip'+(cfg.f===f[1]?' on':'')+'" data-f="'+f[1]+'">'+f[0]+'</button>').join('');
+    const b=$('#cr-on');b.classList.toggle('on',cfg.on);b.textContent=cfg.on?'ДТП включены':'ДТП выключены';
+  };
+  $('#cr-f').onclick=e=>{const b=e.target.closest('[data-f]');if(!b)return;cfg.f=+b.dataset.f;saveCfg();ui()};
+  $('#cr-on').onclick=()=>{cfg.on=!cfg.on;saveCfg();ui()};
+  $('#cr-r').onclick=forceRoad;$('#cr-a').onclick=forceAir;
+  $('#cr-c').onclick=()=>{INCS.slice().forEach(i=>{if(i.phase!=='fall'){i.burn=false;finish(i,true)}})};
+  ui();
+  setInterval(()=>{const s=cstat();$('#cr-st').innerHTML='Сейчас: <b>'+INCS.length+'</b> · Всего ДТП: <b>'+s.n+'</b><br>Пострадавших: '+n0(s.inj)+' · Погибших: '+n0(s.dead)+' · Авиакатастроф: '+s.air},700);
+}
+City.redraw();
+})();
+</script>
 </body>
 </html>
