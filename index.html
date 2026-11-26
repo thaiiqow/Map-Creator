@@ -900,7 +900,7 @@ const BC=['#d7263d','#1b998b','#f46036','#2e86ab','#8e44ad','#c79a00'];
     return (c.dir>0?1:-1)*(c.li+.5)*lw};                       /* вперёд — по правую руку */
   function pos(c){const h=loc(c.R,c.s),d=dOf(c.R,c);return[h.x-h.ty*d,h.y+h.tx*d,h]}
   const auto=R=>Math.min(40,Math.round(inf(R).L/90));
-  const carsOf=R=>(R.cars===undefined||R.cars==='')?auto(R):Math.max(0,Math.min(60,Math.round(+R.cars)||0));
+  const carsOf=R=>Math.min(90,Math.round(((R.cars===undefined||R.cars==='')?auto(R):Math.max(0,Math.min(60,Math.round(+R.cars)||0)))*(window.TRAF?window.TRAF.mult():1)));
 
   /* светофор: 20 с цикл, оси чередуются */
   const phase=axis=>{const t=(T+(axis?10:0))%20;return t<8?'g':t<10?'y':'r'};
@@ -1860,7 +1860,7 @@ function serve(q){
 function sim(){
   const day=City.game.day;if(lastDay===null)lastDay=day;
   const dm=Math.max(0,(day-lastDay)*1440);lastDay=day;
-  if(dm>0)S.stops.forEach(s=>{s.w=Math.min(150,(s.w||0)+(4+near(s)*.08)/60*dm)});
+  if(City.stopTick)City.stopTick(S.stops);
   City.vis().forEach(q=>{if(q.k==='bus'&&q.R)serve(q)});
 }
 City.insp.stops=o=>`<div id="st-w" style="font-size:13px;color:var(--mut)">Ожидают: <b style="color:var(--ink)">${Math.floor(o.w||0)}</b> чел.</div><div style="font-size:12px;color:var(--mut)">Жителей рядом: ≈${n0(near(o))}</div>`;
@@ -5925,7 +5925,7 @@ function place(v,T){const tr=v.leg?T.B:T.F;if(!tr)return;const q=at(tr,v.d);v.x=
 let gmL=null;
 function waitTick(){
   const g=City.gm?City.gm():0;if(gmL===null)gmL=g;const dm=Math.max(0,g-gmL);gmL=g;
-  if(dm>0&&dm<30)stops_().forEach(s=>{s.w=Math.min(150,(s.w||0)+(3+nearPop(s)*.07)/60*dm)});
+  if(City.stopTick)City.stopTick(stops_());
 }
 let last=performance.now();
 (function loop(){
@@ -7552,6 +7552,187 @@ City.layers.over.push((c,P)=>{
     line([[rc.a.x,rc.a.y],mouse],3,'#0c8a86',[8,6]);
   }
 });
+})();
+</script>
+<!-- ===== Плагин: суточный трафик, спрос на остановках, список маршрутов всего транспорта.
+     Вставить В САМЫЙ КОНЕЦ, перед </body>. Нужны 3 правки основного кода (см. сообщение). ===== -->
+<style id="tf-css">
+.rl-h{font-weight:800;margin:10px 0 2px;font-size:13px}
+.rl-i{display:flex;gap:8px;align-items:center;width:100%;text-align:left;border:0;background:none;color:var(--ink);font:inherit;font-size:13px;padding:5px 4px;border-radius:8px;cursor:pointer}
+.rl-i:hover{background:var(--soft)}
+.rl-i i{width:10px;height:10px;border-radius:50%;flex:none}
+.rl-i span{flex:1;min-width:0;overflow-wrap:anywhere}
+#tf-now{margin-top:8px;font-size:13px}
+#tf-now b{color:var(--ink)}
+</style>
+<script>
+(function(){
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const mpu=()=>((City.S.scale||50)/50);
+const E=City.esc;
+
+/* ================= ВРЕМЯ СУТОК ================= */
+const LV=['Очень мало','Средний','Очень много'];
+const CARM=[.15,1,1.8];            /* множитель числа машин: ночь / средне / час пик */
+const STOPM=[.08,.85,1.7];         /* множитель потока людей на остановках */
+function level(){
+  const m=(((City.gm?City.gm():360)%1440)+1440)%1440;
+  if(m>=1405||m<420)return 0;      /* 23:25 – 7:00 */
+  if(m<445)return 1;               /* 7:00 – 7:25 */
+  if(m<600)return 2;               /* 7:25 – 10:00 */
+  if(m<800)return 1;               /* 10:00 – 13:20 */
+  if(m<1200)return 2;              /* 13:20 – 20:00 */
+  return 1;                        /* 20:00 – 23:25 */
+}
+window.TRAF={level,mult:()=>CARM[level()]};
+
+/* при смене уровня просим машины пересчитаться */
+let lastL=null;
+function panel(){
+  const sec=[...document.querySelectorAll('#info .sec')].find(d=>d.firstElementChild&&d.firstElementChild.textContent.trim()==='Трафик');
+  if(!sec)return;
+  let el=document.getElementById('tf-now');
+  if(!el){el=document.createElement('div');el.id='tf-now';sec.querySelector('.sb').appendChild(el)}
+  const l=level(),m=Math.floor((City.gm?City.gm():0)%1440);
+  const h=String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+  const t='Сейчас '+h+': <b>'+LV[l]+'</b> поток';
+  if(el._t!==t){el._t=t;el.innerHTML=t}
+}
+setInterval(()=>{try{
+  const l=level();
+  if(l!==lastL){lastL=l;City.emit('change')}
+  panel();
+}catch(e){console.error(e)}},1000);
+
+/* ================= СПРОС НА ОСТАНОВКАХ ================= */
+/* вес объекта = человек в час (в обычное время) при нулевом расстоянии */
+const WT={shop:60,office:50,industry:45,terminal:150,kinder:18,school:35,college:55,univ:90,park:25};
+const AREAS={shop:1,office:1,industry:1,terminal:1,park:1};   /* вес растёт с площадью */
+const RK={station:70,end:80,vokzal:130,halt:30};
+const ZW={c:2.5,o:3,i:2};          /* вес клетки зоны (жилая считается как жители) */
+const TC=10;
+const area=a=>Math.abs(a.reduce((s,p,i)=>{const q=a[(i+1)%a.length];return s+p[0]*q[1]-q[0]*p[1]},0))/2;
+const bA=b=>b.pts?area(b.pts):b.w*b.h;
+const hw=b=>(b.pop===undefined||b.pop==='')?Math.max(1,Math.round(bA(b)*mpu()*mpu()/25)):Math.max(0,+b.pop||0);
+const cenP=a=>[a.reduce((s,p)=>s+p[0],0)/a.length,a.reduce((s,p)=>s+p[1],0)/a.length];
+const AC=new WeakMap();let ver=0;City.on('change',()=>ver++);
+function attr(s){
+  const c=AC.get(s),now=performance.now();
+  if(c&&c.v===ver&&now-c.t<2500)return c.val;
+  const S=City.S,R=clamp(250/mpu(),60,450);let sum=0,res=0;
+  S.blds.forEach(b=>{
+    const dx=Math.max(b.x-s.x,0,s.x-(b.x+b.w)),dy=Math.max(b.y-s.y,0,s.y-(b.y+b.h)),d=Math.hypot(dx,dy);
+    if(d>=R)return;const f=1-d/R;
+    if(b.t==='house'){res+=hw(b)*f;return}
+    const w=WT[b.t];if(!w)return;
+    const sc=AREAS[b.t]?clamp(Math.sqrt(bA(b)*mpu()*mpu()/3000),.6,3):1;
+    sum+=w*sc*f;
+  });
+  const Z=S.zones,gt=City.game?City.game.day:0;
+  if(Z){
+    const rc=Math.ceil(R/TC),ci=Math.floor(s.x/TC),cj=Math.floor(s.y/TC);
+    for(let j=cj-rc;j<=cj+rc;j++)for(let i=ci-rc;i<=ci+rc;i++){
+      const d=Math.hypot((i+.5)*TC-s.x,(j+.5)*TC-s.y);if(d>=R)continue;
+      const z=Z[(i>>5)+','+(j>>5)];if(!z)continue;
+      const n=((j&31)<<5)|(i&31),t=z.t.charAt(n);if(t===' ')continue;
+      const f=clamp((gt-(z.d.charCodeAt(n)-256))/6,0,1)*(1-d/R);
+      if(t==='r')res+=4*f;else if(ZW[t])sum+=ZW[t]*f;
+    }
+  }
+  (S.lms||[]).forEach(l=>{const d=Math.hypot(l.x-s.x,l.y-s.y);if(d<R)sum+=120*(1-d/R)});
+  (S.ports||[]).forEach(p=>{const d=Math.hypot(p.x-s.x,p.y-s.y);if(d<R)sum+=60*(1-d/R)});
+  (S.rstops||[]).forEach(p=>{const d=Math.hypot(p.x-s.x,p.y-s.y);if(d<R)sum+=(RK[p.k]||50)*(1-d/R)});
+  (S.airports||[]).forEach(a=>{if(!a.pts)return;const c=cenP(a.pts),d=Math.hypot(c[0]-s.x,c[1]-s.y);if(d<R*1.5)sum+=100*(1-d/(R*1.5))});
+  let fd=1;
+  (S.dists||[]).forEach(d=>{if(d.pts&&inPoly([s.x,s.y],d.pts))fd=clamp(.7+Math.sqrt((d.pop||0)/4000)*.6,.7,1.8)});
+  const val=(res*.06+sum)*fd;
+  AC.set(s,{v:ver,t:now,val});return val;
+}
+const fcity=()=>clamp(Math.sqrt((City.totalPop?City.totalPop():0)/2000),.5,2);
+const rate=s=>attr(s)*STOPM[level()]*fcity();      /* человек в час */
+City.stopRate=rate;
+
+const SW=new WeakMap();
+City.stopTick=list=>{
+  const gm=City.gm?City.gm():0;
+  list.forEach(s=>{
+    const prev=SW.has(s)?SW.get(s):gm;SW.set(s,gm);
+    const dm=gm-prev;if(!(dm>0)||dm>60)return;
+    const add=rate(s)/60*dm*(.85+.3*Math.random());
+    s.w=Math.min(200,(s.w||0)*Math.exp(-dm*.01)+add);   /* часть людей не дожидается и уходит */
+  });
+};
+['stops','pstops'].forEach(k=>{
+  const p=City.insp[k];
+  City.insp[k]=o=>(p?p(o):'')+'<div style="font-size:12px;color:var(--mut)">Поток: ≈'+Math.round(rate(o))+' чел/ч · '+LV[level()].toLowerCase()+'</div>';
+});
+
+/* ================= СПИСОК МАРШРУТОВ ВСЕГО ТРАНСПОРТА ================= */
+const LS=k=>{try{return localStorage.getItem(k)}catch(e){return null}};
+const TYPES=[['bus','Автобус'],['trol','Троллейбус'],['tram','Трамвай'],['metro','Метро'],['train','Поезд'],['air','Самолёт'],['sea','Корабль']];
+const fmt=n=>{n=String(n||'').trim();const m=/^(\d+[A-Za-zА-Яа-я]?)\s+(.*)$/.exec(n);return m?m[1]+' — '+m[2].replace(/\s*[—–]\s*/g,' – '):n};
+const nm=(arr,id)=>{const x=(arr||[]).find(q=>q.id===id);return x?x.n:''};
+function items(t){
+  const S=City.S;
+  if(t==='bus')return(S.routes||[]).map(o=>({k:'routes',o,t:fmt(o.n)+(o.loop?' ↻':'')}));
+  if(t==='tram'||t==='trol')return(S.vroutes||[]).filter(o=>o.sys===t).map(o=>({k:'vroutes',o,t:fmt(o.n)+(o.loop?' ↻':'')}));
+  if(t==='metro'||t==='train')return(S.rlines||[]).filter(o=>o.sys===t).map(o=>{
+    const ids=(o.s||[]).filter(e=>!Array.isArray(e)),a=nm(S.rstops,ids[0]),b=nm(S.rstops,ids[ids.length-1]);
+    return{k:'rlines',o,t:o.n+(a&&b?' — '+a+' – '+b:'')+(o.loop?' ↻':'')};
+  });
+  if(t==='air')return(S.aroutes||[]).map(o=>({k:'aroutes',o,t:o.n+' — '+o.s.map(id=>nm(S.airports,id)).filter(Boolean).join(' – ')+(o.loop?' ↻':'')}));
+  if(t==='sea')return(S.sroutes||[]).map(o=>({k:'sroutes',o,t:o.n+' — '+o.s.map(id=>nm(S.ports,id)).filter(Boolean).join(' – ')+(o.loop?' ↻':'')}));
+  return[];
+}
+function firstPt(it){
+  const S=City.S,o=it.o;
+  if(it.k==='routes'){const s=(S.stops||[]).find(x=>x.id===o.s[0]);return s&&[s.x,s.y]}
+  if(it.k==='vroutes'){const s=(S.pstops||[]).find(x=>x.id===o.s[0]);return s&&[s.x,s.y]}
+  if(it.k==='rlines'){const e=o.s[0];if(Array.isArray(e))return e;const s=(S.rstops||[]).find(x=>x.id===e);return s&&[s.x,s.y]}
+  if(it.k==='aroutes'){const a=(S.airports||[]).find(x=>x.id===o.s[0]);return a&&a.pts&&cenP(a.pts)}
+  if(it.k==='sroutes'){const p=(S.ports||[]).find(x=>x.id===o.s[0]);return p&&[p.x,p.y]}
+  return null;
+}
+let cur=[],sigR='';
+function active(){
+  let a=[];try{a=JSON.parse(LS('ui:routes')||'[]')}catch(e){}
+  const s=new Set(a);return TYPES.filter(t=>s.has(t[0]));
+}
+function box(){
+  const sec=[...document.querySelectorAll('#info .sec')].find(d=>d.firstElementChild&&d.firstElementChild.textContent.trim()==='Маршруты');
+  if(!sec)return null;
+  const sb=sec.querySelector('.sb');let el=sb.querySelector('#rl-list');
+  if(!el){
+    el=document.createElement('div');el.id='rl-list';sb.appendChild(el);
+    el.addEventListener('click',e=>{
+      const b=e.target.closest('[data-i]');if(!b)return;
+      const it=cur[+b.dataset.i];if(!it)return;
+      if(City.follow&&City.follow()){const fx=$('#fol-x');if(fx)fx.click()}
+      City.select(it.k,it.o);
+      const p=firstPt(it);
+      if(p){V.k=Math.max(V.k,.6);V.x=cv.clientWidth/2-V.k*p[0];V.y=cv.clientHeight/2-V.k*p[1]}
+      City.updateUI();City.redraw();
+      $('#side').classList.remove('open');
+    });
+    sb.addEventListener('click',()=>setTimeout(render,60));
+  }
+  return el;
+}
+function render(){
+  const el=box();if(!el)return;
+  const act=active();cur=[];
+  let h='';
+  if(!act.length)h='<div class="mu" style="margin-top:8px">Выберите вид транспорта, чтобы увидеть маршруты.</div>';
+  else act.forEach(t=>{
+    const L=items(t[0]);
+    h+='<div class="rl-h">'+t[1]+(L.length?' · '+L.length:'')+':</div>';
+    if(!L.length)h+='<div class="mu">нет маршрутов</div>';
+    L.forEach(it=>{cur.push(it);h+='<button class="rl-i" data-i="'+(cur.length-1)+'"><i style="background:'+E(it.o.c||'#888')+'"></i><span>'+E(it.t)+'</span></button>'});
+  });
+  if(el._h!==h){el._h=h;el.innerHTML=h}
+}
+setInterval(()=>{try{render()}catch(e){console.error(e)}},700);
+render();
 })();
 </script>
 </body>
